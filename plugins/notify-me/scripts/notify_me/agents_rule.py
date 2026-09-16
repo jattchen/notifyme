@@ -22,6 +22,10 @@ MANAGED_BLOCK_RE = re.compile(
     r"(?:.*?<!-- notify-me:managed:end -->|.*\Z)",
     re.DOTALL,
 )
+_COMPLETE_CURRENT_BLOCK_RE = re.compile(
+    re.escape(MANAGED_START) + r".+?" + re.escape(MANAGED_END),
+    re.DOTALL,
+)
 
 
 def managed_block():
@@ -90,4 +94,4 @@ def has_managed_block(text=None):
         if not path.is_file():
             return False
         text = path.read_text(encoding="utf-8")
-    return MANAGED_START in text
+    return _COMPLETE_CURRENT_BLOCK_RE.search(text) is not None
