@@ -104,9 +104,17 @@ class BarkEndpoint:
         server = data.get("server")
         key = data.get("key")
         host = data.get("host")
+        if not isinstance(server, str) or not isinstance(key, str) or not isinstance(host, str):
+            raise NotifyMeError("invalid_binding", "Bark 绑定不完整")
         if not server or not key or not host:
             raise NotifyMeError("invalid_binding", "Bark 绑定不完整")
-        return cls(server=server, key=key, host=host)
+        try:
+            parsed = cls.parse("{}/{}".format(server, key))
+        except NotifyMeError as exc:
+            raise NotifyMeError("invalid_binding", "Bark 绑定损坏") from exc
+        if parsed.server != server or parsed.key != key or parsed.host != host:
+            raise NotifyMeError("invalid_binding", "Bark 绑定与推送地址不一致")
+        return parsed
 
     def to_stored(self):
         return {"server": self.server, "host": self.host, "key": self.key}

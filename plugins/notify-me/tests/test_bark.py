@@ -140,3 +140,44 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(loaded.key, endpoint.key)
         public = json.dumps(binding.public_view())
         self.assertNotIn("Abcdefgh1234", public)
+
+    def _write_stored(self, binding, payload):
+        binding.path.write_text(json.dumps(payload), encoding="utf-8")
+        binding.path.chmod(0o600)
+
+    def test_load_rejects_tampered_http_or_mismatched_host(self):
+        binding = Binding(self.home)
+        endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        binding.save(endpoint)
+        stored = endpoint.to_stored()
+
+        self._write_stored(
+            binding,
+            {"server": "http://evil.example", "host": stored["host"], "key": stored["key"]},
+        )
+        with self.assertRaises(NotifyMeError):
+            binding.load()
+        http_view = binding.public_view()
+        self.assertFalse(http_view["bound"])
+        self.assertIsNone(http_view["host"])
+
+        self._write_stored(
+            binding,
+            {
+                "server": "https://evil.example",
+                "host": stored["host"],
+                "key": stored["key"],
+            },
+        )
+        with self.assertRaises(NotifyMeError):
+            binding.load()
+        mismatch_view = binding.public_view()
+        self.assertFalse(mismatch_view["bound"])
+        self.assertIsNone(mismatch_view["host"])
+
+        local = BarkEndpoint.parse("http://127.0.0.1/Abcdefgh1234")
+        binding.save(local)
+        loaded_local = binding.load()
+        self.assertEqual(loaded_local.server, "http://127.0.0.1")
+        self.assertEqual(loaded_local.host, "127.0.0.1")
+        self.assertEqual(binding.public_view()["host"], "127.0.0.1")
