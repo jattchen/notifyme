@@ -41,8 +41,17 @@ def _stub_env(tmpdir):
     return env, grok_log
 
 
-def _run_piped_install_sh(env, stdout_tty):
-    script = INSTALL_SH.read_bytes()
+def _truncate_before_main_call(source: str) -> str:
+    lines = source.splitlines(keepends=True)
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].strip() == 'main "$@"':
+            return "".join(lines[:index])
+    return source
+
+
+def _run_piped_install_sh(env, stdout_tty, script=None):
+    if script is None:
+        script = INSTALL_SH.read_bytes()
     if not stdout_tty:
         completed = subprocess.run(
             ["bash"],
@@ -115,6 +124,17 @@ class PipedInstallShTests(unittest.TestCase):
         self.assertNotEqual(returncode, 0, stderr)
         leftovers = [path.name for path in scratch.iterdir()]
         self.assertEqual(leftovers, [])
+
+    def test_truncated_before_main_does_not_run_plugin_install(self):
+        truncated = _truncate_before_main_call(
+            INSTALL_SH.read_text(encoding="utf-8")
+        )
+        _returncode, stderr = _run_piped_install_sh(
+            self.env,
+            stdout_tty=True,
+            script=truncated.encode("utf-8"),
+        )
+        self.assertFalse(self.grok_log.is_file(), stderr)
 
 
 class TtyStdout(StringIO):
