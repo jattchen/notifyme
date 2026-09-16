@@ -70,6 +70,7 @@ class DeliverTests(unittest.TestCase):
             }
         )
         self.assertEqual(first["status"], "accepted")
+        self.assertTrue(first["ok"])
         self.assertEqual(self.transport.payloads[0]["title"], TITLE_MARKS["answer"])
         self.assertEqual(self.transport.payloads[0]["body"], "请提供 API token")
         self.assertEqual(self.transport.payloads[0]["level"], "timeSensitive")
@@ -85,6 +86,7 @@ class DeliverTests(unittest.TestCase):
             }
         )
         self.assertEqual(second["status"], "deduplicated")
+        self.assertTrue(second["ok"])
         self.assertEqual(self.transport.calls, 1)
 
     def test_send_accepted_then_deduplicated_across_deliverers(self):
@@ -188,6 +190,7 @@ class DeliverTests(unittest.TestCase):
             }
         )
         self.assertEqual(first["status"], "failed")
+        self.assertFalse(first["ok"])
         self.assertEqual(self.transport.payloads[0]["title"], TITLE_MARKS["severe-risk"])
         self.assertEqual(self.transport.payloads[0]["level"], "critical")
         second = self.deliverer.send(
@@ -199,7 +202,27 @@ class DeliverTests(unittest.TestCase):
             }
         )
         self.assertEqual(second["status"], "accepted")
+        self.assertTrue(second["ok"])
         self.assertEqual(self.transport.calls, 2)
+
+    def test_failed_send_and_test_are_not_ok(self):
+        self.transport.results = [
+            TransportResult(False, True, "network_error", None, 2),
+            TransportResult(False, False, "rejected", 400, 1),
+        ]
+        sent = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertEqual(sent["status"], "failed")
+        self.assertFalse(sent["ok"])
+        tested = self.deliverer.test({"message": "测试"})
+        self.assertEqual(tested["status"], "failed")
+        self.assertFalse(tested["ok"])
 
     def test_dry_run_does_not_post_or_dedup(self):
         result = self.deliverer.send(
@@ -212,6 +235,7 @@ class DeliverTests(unittest.TestCase):
             }
         )
         self.assertEqual(result["status"], "dry_run")
+        self.assertTrue(result["ok"])
         self.assertEqual(self.transport.calls, 0)
         accepted = self.deliverer.send(
             {
@@ -244,6 +268,7 @@ class DeliverTests(unittest.TestCase):
     def test_test_dry_run_does_not_post(self):
         result = self.deliverer.test({"dry_run": True})
         self.assertEqual(result["status"], "dry_run")
+        self.assertTrue(result["ok"])
         self.assertEqual(result["title"], TEST_TITLE)
         self.assertEqual(self.transport.calls, 0)
 
