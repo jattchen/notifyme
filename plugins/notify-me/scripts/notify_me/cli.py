@@ -88,7 +88,10 @@ def main(argv=None):
             if sub == "plan":
                 result = plan_agents()
             elif sub == "commit":
-                result = commit_agents()
+                if options.get("dry_run"):
+                    result = {"ok": True, "status": "dry_run"}
+                else:
+                    result = commit_agents()
             else:
                 raise NotifyMeError("invalid_arguments", "agents-rule 只支持 plan 或 commit")
         elif command == "install":
