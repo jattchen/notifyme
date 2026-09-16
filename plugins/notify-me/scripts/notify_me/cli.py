@@ -38,15 +38,12 @@ def _options(tokens):
 
 
 def _setup(options):
-    if options.get("from_stdin"):
-        raw = sys.stdin.read()
-    else:
-        if not sys.stdin.isatty():
-            raise NotifyMeError(
-                "tty_required",
-                "setup 必须在终端里输入 Bark 地址，不要把 URL 发到对话里",
-            )
-        raw = getpass.getpass("请粘贴 Bark 推送 URL（输入不可见）：")
+    if not sys.stdin.isatty():
+        raise NotifyMeError(
+            "tty_required",
+            "setup 必须在终端里输入 Bark 地址，不要把 URL 发到对话里",
+        )
+    raw = getpass.getpass("请粘贴 Bark 推送 URL（输入不可见）：")
     endpoint = BarkEndpoint.parse(raw)
     view = Binding().save(endpoint)
     return {"ok": True, "status": "bound", "host": view["host"]}

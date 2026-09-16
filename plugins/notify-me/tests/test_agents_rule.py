@@ -99,6 +99,20 @@ class CliTests(unittest.TestCase):
         payload = json.loads(buf.getvalue())
         self.assertEqual(payload["error"]["code"], "tty_required")
 
+    def test_setup_from_stdin_does_not_bypass_tty(self):
+        from io import StringIO
+        from unittest import mock
+
+        fake_stdin = StringIO("https://api.day.app/Abcdefgh1234\n")
+        fake_stdin.isatty = lambda: False
+        buf = StringIO()
+        with mock.patch("sys.stdin", fake_stdin), mock.patch("sys.stdout", buf):
+            code = main(["setup", "--from-stdin"])
+        self.assertEqual(code, 1)
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(payload["error"]["code"], "tty_required")
+        self.assertFalse((Path(self.tmpdir.name) / "binding.json").exists())
+
     def test_agents_rule_plan_json(self):
         from io import StringIO
         from unittest import mock
