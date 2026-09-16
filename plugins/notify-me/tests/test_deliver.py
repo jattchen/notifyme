@@ -87,6 +87,31 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(second["status"], "deduplicated")
         self.assertEqual(self.transport.calls, 1)
 
+    def test_send_accepted_then_deduplicated_across_deliverers(self):
+        other = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=self.transport,
+        )
+        first = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertEqual(first["status"], "accepted")
+        second = other.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertEqual(second["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 1)
+
     def test_answer_then_done_same_incident_both_accepted(self):
         first = self.deliverer.send(
             {
