@@ -14,7 +14,20 @@ from notify_me.agents_rule import (  # noqa: E402
     managed_block,
     plan,
 )
-from notify_me.cli import main  # noqa: E402
+from notify_me.bark import BarkEndpoint, TransportResult  # noqa: E402
+from notify_me.binding import Binding  # noqa: E402
+from notify_me.cli import _options, main  # noqa: E402
+from notify_me.deliver import Deliverer  # noqa: E402
+from notify_me.errors import NotifyMeError  # noqa: E402
+
+
+class _CountTransport:
+    def __init__(self):
+        self.calls = 0
+
+    def send_with_retry(self, endpoint, payload, sleep=None, max_attempts=2):
+        self.calls += 1
+        return TransportResult(True, False, "accepted", 200, 1)
 
 
 class AgentsRuleTests(unittest.TestCase):
@@ -110,7 +123,7 @@ class CliTests(unittest.TestCase):
             code = main(["setup", "--from-stdin"])
         self.assertEqual(code, 1)
         payload = json.loads(buf.getvalue())
-        self.assertEqual(payload["error"]["code"], "tty_required")
+        self.assertEqual(payload["error"]["code"], "invalid_arguments")
         self.assertFalse((Path(self.tmpdir.name) / "binding.json").exists())
 
     def test_agents_rule_plan_json(self):
@@ -124,3 +137,81 @@ class CliTests(unittest.TestCase):
         payload = json.loads(buf.getvalue())
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "plan")
+
+    def _bound_deliverer(self):
+        binding = Binding(Path(self.tmpdir.name))
+        binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
+        transport = _CountTransport()
+        return Deliverer(binding=binding, transport=transport), transport
+
+    def test_options_rejects_misspelled_dry_run(self):
+        with self.assertRaises(NotifyMeError) as caught:
+            _options(["--dry-ru"])
+        self.assertEqual(caught.exception.code, "invalid_arguments")
+
+    def test_options_rejects_message_without_value(self):
+        with self.assertRaises(NotifyMeError) as caught:
+            _options(["--message", "--dry-run"])
+        self.assertEqual(caught.exception.code, "invalid_arguments")
+
+    def test_unknown_option_names_are_rejected(self):
+        for tokens in (
+            ["--dry-ru"],
+            ["--dry_run"],
+            ["--dry-runn"],
+            ["--from-stdin"],
+            ["--verbose"],
+            ["--message"],
+        ):
+            with self.subTest(tokens=tokens):
+                with self.assertRaises(NotifyMeError) as caught:
+                    _options(tokens)
+                self.assertEqual(caught.exception.code, "invalid_arguments")
+
+    def test_test_misspelled_dry_run_does_not_post(self):
+        from io import StringIO
+        from unittest import mock
+
+        deliverer, transport = self._bound_deliverer()
+        buf = StringIO()
+        with mock.patch("notify_me.cli.Deliverer", return_value=deliverer), mock.patch(
+            "sys.stdout", buf
+        ):
+            code = main(["test", "--dry-ru"])
+        self.assertNotEqual(code, 0)
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(payload["error"]["code"], "invalid_arguments")
+        self.assertNotEqual(payload["error"]["message"], "message 必须是字符串")
+        self.assertEqual(transport.calls, 0)
+
+    def test_test_dry_run_still_dry_runs(self):
+        from io import StringIO
+        from unittest import mock
+
+        deliverer, transport = self._bound_deliverer()
+        buf = StringIO()
+        with mock.patch("notify_me.cli.Deliverer", return_value=deliverer), mock.patch(
+            "sys.stdout", buf
+        ):
+            code = main(["test", "--dry-run"])
+        self.assertEqual(code, 0)
+        payload = json.loads(buf.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "dry_run")
+        self.assertEqual(transport.calls, 0)
+
+    def test_test_message_flag_without_string_does_not_post(self):
+        from io import StringIO
+        from unittest import mock
+
+        deliverer, transport = self._bound_deliverer()
+        buf = StringIO()
+        with mock.patch("notify_me.cli.Deliverer", return_value=deliverer), mock.patch(
+            "sys.stdout", buf
+        ):
+            code = main(["test", "--message", "--dry-run"])
+        self.assertNotEqual(code, 0)
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(payload["error"]["code"], "invalid_arguments")
+        self.assertNotEqual(payload["error"]["message"], "message 必须是字符串")
+        self.assertEqual(transport.calls, 0)
