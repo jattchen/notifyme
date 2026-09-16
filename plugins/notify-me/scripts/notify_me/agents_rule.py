@@ -18,7 +18,8 @@ MANAGED_BODY = (
     "未命中不发。中间步骤不发 done。仅 status=accepted 可称已推送。"
 )
 MANAGED_BLOCK_RE = re.compile(
-    r"<!-- notify-me:managed:start version=.*?-->.*?<!-- notify-me:managed:end -->",
+    r"<!-- notify-me:managed:start version=.*?-->"
+    r"(?:.*?<!-- notify-me:managed:end -->|.*\Z)",
     re.DOTALL,
 )
 
@@ -34,7 +35,7 @@ def agents_path():
 def _apply(text):
     block = managed_block()
     if MANAGED_BLOCK_RE.search(text or ""):
-        return MANAGED_BLOCK_RE.sub(block, text), "replaced"
+        return MANAGED_BLOCK_RE.sub(lambda _: block, text), "replaced"
     body = text or ""
     if body and not body.endswith("\n"):
         body += "\n"

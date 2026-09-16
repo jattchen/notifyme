@@ -78,6 +78,44 @@ class AgentsRuleTests(unittest.TestCase):
         self.assertNotIn("version=grok-1", text)
         self.assertNotIn("\nold\n", text)
 
+    def test_commit_replaces_start_only_leftover(self):
+        path = Path(self.tmpdir.name) / "AGENTS.md"
+        path.write_text(
+            "# 全局\n\n<!-- notify-me:managed:start version=grok-1 -->\nleftover chunk\n",
+            encoding="utf-8",
+        )
+        result = commit()
+        self.assertEqual(result["status"], "committed")
+        self.assertEqual(result["action"], "replaced")
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count("<!-- notify-me:managed:start"), 1)
+        self.assertEqual(text.count("<!-- notify-me:managed:end -->"), 1)
+        self.assertIn(managed_block(), text)
+        self.assertNotIn("leftover chunk", text)
+        self.assertNotIn("version=grok-1", text)
+
+    def test_commit_writes_backslash_body_literally(self):
+        from unittest import mock
+
+        from notify_me import agents_rule
+
+        block = (
+            "<!-- notify-me:managed:start version={} -->\n"
+            "keep \\1 and \\\\ here\n"
+            "<!-- notify-me:managed:end -->"
+        ).format(MANAGED_VERSION)
+        path = Path(self.tmpdir.name) / "AGENTS.md"
+        path.write_text(
+            "# 全局\n\n<!-- notify-me:managed:start version=1 -->\nold\n<!-- notify-me:managed:end -->\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(agents_rule, "managed_block", return_value=block):
+            result = commit()
+        self.assertEqual(result["status"], "committed")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("keep \\1 and \\\\ here", text)
+        self.assertNotIn("\nold\n", text)
+
 
 class CliTests(unittest.TestCase):
     def setUp(self):
