@@ -28,68 +28,28 @@ main() {
 
   grok_home="${GROK_HOME:-$HOME/.grok}"
   if ! plugin="$(python3 - "$grok_home" <<'NOTIFY_ME_RESOLVE_PLUGIN'
-import json
 import sys
 from pathlib import Path
 
 home = Path(sys.argv[1]).expanduser()
 installed = home / "installed-plugins"
-needle = Path("scripts") / "notify_me.py"
-
-
-def usable(path):
-    try:
-        return (
-            path.is_dir()
-            and path.name.startswith("notify-me-")
-            and (path / needle).is_file()
-        )
-    except OSError:
-        return False
-
-
-matches = []
-registry = installed / "registry.json"
-try:
-    data = json.loads(registry.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-    data = {}
-repos = data.get("repos") if isinstance(data, dict) else None
-if isinstance(repos, dict):
-    for key, repo in repos.items():
-        if not isinstance(repo, dict):
-            continue
-        plugins = repo.get("plugins") or {}
-        if not isinstance(plugins, dict) or "notify-me" not in plugins:
-            continue
-        raw = repo.get("path") or str(installed / key)
-        path = Path(raw).expanduser()
-        if usable(path):
-            stamp = str(repo.get("updated_at") or repo.get("installed_at") or "")
-            matches.append((stamp, str(path.resolve())))
-if matches:
-    matches.sort()
-    print(matches[-1][1])
-    raise SystemExit(0)
-
-mtime_hits = []
 try:
     candidates = list(installed.glob("notify-me-*"))
 except OSError:
     candidates = []
 for path in candidates:
-    if not usable(path):
+    scripts = path / "scripts"
+    if not (scripts / "notify_me" / "paths.py").is_file():
         continue
-    try:
-        stamp = path.stat().st_mtime_ns
-    except OSError:
-        continue
-    mtime_hits.append((stamp, str(path.resolve())))
-if mtime_hits:
-    mtime_hits.sort()
-    print(mtime_hits[-1][1])
-    raise SystemExit(0)
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from notify_me.paths import installed_plugin_root
 
+    root = installed_plugin_root(home)
+    if root is None:
+        raise SystemExit(1)
+    print(root)
+    raise SystemExit(0)
 raise SystemExit(1)
 NOTIFY_ME_RESOLVE_PLUGIN
 )"; then

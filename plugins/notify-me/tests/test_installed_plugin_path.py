@@ -377,9 +377,15 @@ class InstallShResolverTests(unittest.TestCase):
         self.assertIn("notifyme:", text)
         self.assertNotIn("mcp remove notify_me", text)
 
+    def test_install_sh_resolver_delegates_to_python(self):
+        source = _extract_install_sh_resolver()
+        self.assertIn("installed_plugin_root", source)
+        self.assertNotIn("registry.json", source)
+        self.assertNotIn("st_mtime_ns", source)
+
     def test_install_sh_resolver_matches_python(self):
-        leftover = _make_plugin(self.installed, "notify-me-oldhash", mtime=2_000)
-        chosen = _make_plugin(self.installed, "notify-me-reghash", mtime=1_000)
+        leftover = _make_real_plugin(self.installed, "notify-me-oldhash", mtime=2_000)
+        chosen = _make_real_plugin(self.installed, "notify-me-reghash", mtime=1_000)
         _write_registry(
             self.installed,
             {
@@ -401,8 +407,8 @@ class InstallShResolverTests(unittest.TestCase):
         self.assertEqual(Path(result.stdout.strip()).resolve(), expected)
 
     def test_install_sh_resolver_newest_without_registry(self):
-        _make_plugin(self.installed, "notify-me-aaaaaaa", mtime=1_000)
-        newer = _make_plugin(self.installed, "notify-me-bbbbbbb", mtime=2_000)
+        _make_real_plugin(self.installed, "notify-me-aaaaaaa", mtime=1_000)
+        newer = _make_real_plugin(self.installed, "notify-me-bbbbbbb", mtime=2_000)
         result = _run_install_sh_resolver(self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Path(result.stdout.strip()).resolve(), newer)
@@ -521,6 +527,98 @@ class EnsureMcpUpgradeTests(unittest.TestCase):
         result = _run_install_sh_mcp_register(self.new_plugin, self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self._assert_mcp_rewritten_to_current_plugin()
+
+
+def _write_grok_log_stub(bindir):
+    grok = bindir / "grok"
+    grok.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$GROK_STUB_LOG"
+exit 0
+""",
+        encoding="utf-8",
+    )
+    grok.chmod(0o755)
+
+
+class EnsurePluginSelfInstallTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.bindir = self.root / "bin"
+        self.bindir.mkdir()
+        self.grok_home = self.root / "grok-home"
+        self.installed = self.grok_home / "installed-plugins"
+        self.installed.mkdir(parents=True)
+        self.grok_log = self.root / "grok.log"
+        _write_grok_log_stub(self.bindir)
+        self.env = os.environ.copy()
+        self.env["PATH"] = "{}:/usr/bin:/bin".format(self.bindir)
+        self.env["GROK_HOME"] = str(self.grok_home)
+        self.env["GROK_STUB_LOG"] = str(self.grok_log)
+        self.env["GROK_NOTIFY_ME_HOME"] = str(self.root / "state")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _logged(self):
+        if not self.grok_log.is_file():
+            return ""
+        return self.grok_log.read_text(encoding="utf-8")
+
+    def _run_ensure_plugin_from(self, plugin):
+        return subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys;"
+                    "sys.path.insert(0, sys.argv[1]);"
+                    "from notify_me.install import _ensure_plugin;"
+                    "_ensure_plugin()"
+                ),
+                str(plugin / "scripts"),
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+
+    def test_ensure_plugin_does_not_reinstall_current_hash_dir(self):
+        plugin = _make_real_plugin(self.installed, "notify-me-abc123")
+        (plugin / "plugin.json").write_text("{}\n", encoding="utf-8")
+        result = self._run_ensure_plugin_from(plugin)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        logged = self._logged()
+        self.assertNotIn("plugin install {}".format(plugin), logged)
+        self.assertNotIn("jattchen/notifyme#plugins/notify-me", logged)
+
+    def test_ensure_plugin_does_not_reinstall_leftover_hash_dir(self):
+        leftover = _make_real_plugin(self.installed, "notify-me-oldhash", mtime=2_000)
+        current = _make_real_plugin(self.installed, "notify-me-current", mtime=1_000)
+        (leftover / "plugin.json").write_text("{}\n", encoding="utf-8")
+        (current / "plugin.json").write_text("{}\n", encoding="utf-8")
+        _write_registry(
+            self.installed,
+            {
+                leftover.name: {
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "path": str(leftover),
+                    "plugins": {"other": {"version": "1.0.0"}},
+                },
+                current.name: {
+                    "updated_at": "2026-02-01T00:00:00+00:00",
+                    "path": str(current),
+                    "plugins": {"notify-me": {"version": "1.0.0"}},
+                },
+            },
+        )
+        result = self._run_ensure_plugin_from(leftover)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        logged = self._logged()
+        self.assertNotIn("plugin install {}".format(leftover), logged)
+        self.assertNotIn("plugin install {}".format(current), logged)
+        self.assertNotIn("jattchen/notifyme#plugins/notify-me", logged)
 
 
 class GhFallbackTempCleanupTests(unittest.TestCase):
