@@ -135,6 +135,9 @@ def serve(deliverer=None, tool_name=None):
                 continue
             name = params.get("name")
             arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                _write_rpc_error(-32602, "Invalid params", msg_id)
+                continue
             if name != tool_name:
                 _write_message(
                     {
