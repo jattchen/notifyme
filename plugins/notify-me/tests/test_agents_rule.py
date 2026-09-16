@@ -174,6 +174,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "invalid_arguments")
         self.assertFalse((Path(self.tmpdir.name) / "binding.json").exists())
 
+    def test_setup_dry_run_does_not_write_binding(self):
+        from io import StringIO
+        from unittest import mock
+
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://api.day.app/Abcdefgh1234",
+        ), mock.patch("sys.stdout", buf):
+            code = main(["setup", "--dry-run"])
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "dry_run")
+        self.assertFalse((Path(self.tmpdir.name) / "binding.json").exists())
+
     def test_agents_rule_plan_json(self):
         from io import StringIO
         from unittest import mock
