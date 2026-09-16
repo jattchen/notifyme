@@ -98,10 +98,11 @@ if [[ ! -f "$plugin/scripts/mcp_server.py" || ! -f "$plugin/scripts/notify_me.py
   exit 1
 fi
 
-if ! grok mcp list 2>/dev/null | grep -q '^[[:space:]]*notify_me:'; then
+mcp_list="$(grok mcp list 2>/dev/null || true)"
+if ! printf '%s\n' "$mcp_list" | grep '^[[:space:]]*notify_me:' | grep -Fq -- "$plugin/scripts/mcp_server.py"; then
   grok mcp add notify_me -- python3 -u "$plugin/scripts/mcp_server.py"
 fi
-if ! grok mcp list 2>/dev/null | grep -q '^[[:space:]]*notifyme:'; then
+if ! printf '%s\n' "$mcp_list" | grep '^[[:space:]]*notifyme:' | grep -Fq -- "$plugin/scripts/mcp_server.py"; then
   grok mcp add notifyme -- python3 -u "$plugin/scripts/mcp_server.py" --name notifyme
 fi
 
