@@ -353,6 +353,31 @@ class DeliverTests(unittest.TestCase):
             payload["title"], "{} · {}".format(TITLE_MARKS["answer"], "demo-proj")
         )
 
+    def test_send_resolves_project_name_once(self):
+        repo = Path(self.tmpdir.name) / "demo-proj"
+        (repo / ".git").mkdir(parents=True)
+        env = {"GROK_WORKSPACE_ROOT": str(repo)}
+        with mock.patch(
+            "notify_me.deliver.project_name", return_value="demo-proj"
+        ) as resolved:
+            result = self.deliverer.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                },
+                env,
+            )
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(resolved.call_count, 1)
+        resolved.assert_called_once_with(env)
+        payload = self.transport.payloads[0]
+        self.assertEqual(payload["group"], "demo-proj")
+        self.assertEqual(
+            payload["title"], "{} · {}".format(TITLE_MARKS["answer"], "demo-proj")
+        )
+
     def test_same_project_tasks_share_bark_group(self):
         repo = Path(self.tmpdir.name) / "demo-proj"
         (repo / ".git").mkdir(parents=True)
