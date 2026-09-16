@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ SCRIPTS = ROOT / "scripts"
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SCRIPTS))
 
+from notify_me.install import _ensure_mcp  # noqa: E402
 from notify_me.paths import installed_plugin_root  # noqa: E402
 
 DOCUMENTED_SCRIPT = "~/.grok/installed-plugins/notify-me-*/scripts/notify_me.py"
@@ -309,3 +311,113 @@ class InstallShResolverTests(unittest.TestCase):
         result = _run_install_sh_resolver(self.home)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "")
+
+
+def _write_grok_mcp_stub(bindir):
+    grok = bindir / "grok"
+    grok.write_text(
+        """#!/bin/sh
+if [ "$1" = mcp ] && [ "$2" = list ]; then
+  printf '%s\\n' "$GROK_MCP_LIST"
+  exit 0
+fi
+if [ "$1" = mcp ] && [ "$2" = add ]; then
+  printf '%s\\n' "$*" >> "$GROK_MCP_ADD_LOG"
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    grok.chmod(0o755)
+
+
+def _stale_mcp_list(old_plugin):
+    server = old_plugin / "scripts" / "mcp_server.py"
+    return (
+        "  notify_me: python3 -u {0}\n"
+        "  notifyme: python3 -u {0} --name notifyme\n"
+    ).format(server)
+
+
+def _extract_install_sh_mcp_register():
+    text = (REPO / "install.sh").read_text(encoding="utf-8")
+    end = text.index("# Do not inherit the install script pipe")
+    for token in (
+        'mcp_list="$(grok mcp list',
+        "if ! grok mcp list",
+        "grok mcp add notify_me",
+    ):
+        found = text.find(token)
+        if found != -1 and found < end:
+            return text[found:end]
+    raise AssertionError("install.sh MCP registration block not found")
+
+
+def _run_install_sh_mcp_register(plugin, env):
+    block = _extract_install_sh_mcp_register()
+    script = "plugin={}\n{}".format(shlex.quote(str(plugin)), block)
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+class EnsureMcpUpgradeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.bindir = self.root / "bin"
+        self.bindir.mkdir()
+        installed = self.root / "installed-plugins"
+        installed.mkdir()
+        self.old_plugin = _make_plugin(installed, "notify-me-b47b0296")
+        self.new_plugin = _make_plugin(installed, "notify-me-2d1cddc3")
+        self.add_log = self.root / "mcp-add.log"
+        _write_grok_mcp_stub(self.bindir)
+        self.env = os.environ.copy()
+        self.env["PATH"] = "{}:/usr/bin:/bin".format(self.bindir)
+        self.env["GROK_MCP_LIST"] = _stale_mcp_list(self.old_plugin)
+        self.env["GROK_MCP_ADD_LOG"] = str(self.add_log)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _added_commands(self):
+        if not self.add_log.is_file():
+            return ""
+        return self.add_log.read_text(encoding="utf-8")
+
+    def _assert_mcp_rewritten_to_current_plugin(self):
+        logged = self._added_commands()
+        new_server = str(self.new_plugin / "scripts" / "mcp_server.py")
+        old_server = str(self.old_plugin / "scripts" / "mcp_server.py")
+        self.assertIn("mcp add notify_me", logged)
+        self.assertIn("mcp add notifyme", logged)
+        self.assertIn(new_server, logged)
+        self.assertEqual(logged.count(new_server), 2)
+        self.assertNotIn(old_server, logged)
+        self.assertNotIn("notify-me-b47b0296", logged)
+
+    def test_ensure_mcp_rewrites_existing_names_to_current_plugin_dir(self):
+        original_path = os.environ.get("PATH")
+        os.environ["PATH"] = self.env["PATH"]
+        os.environ["GROK_MCP_LIST"] = self.env["GROK_MCP_LIST"]
+        os.environ["GROK_MCP_ADD_LOG"] = self.env["GROK_MCP_ADD_LOG"]
+        try:
+            _ensure_mcp(self.new_plugin)
+        finally:
+            if original_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = original_path
+            os.environ.pop("GROK_MCP_LIST", None)
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        self._assert_mcp_rewritten_to_current_plugin()
+
+    def test_install_sh_rewrites_existing_names_to_current_plugin_dir(self):
+        result = _run_install_sh_mcp_register(self.new_plugin, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self._assert_mcp_rewritten_to_current_plugin()
