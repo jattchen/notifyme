@@ -148,9 +148,8 @@ def project_name(env=None):
     return _project_from(env.get("PWD"), home)
 
 
-def _compose_title(condition, env=None):
+def _compose_title(condition, project=None):
     mark = TITLE_MARKS[condition]
-    project = project_name(env)
     if project:
         return "{} · {}".format(mark, project)
     return mark
@@ -252,10 +251,11 @@ class Deliverer:
                 "item_id": item_id,
                 "state": state,
             }
-        title = _compose_title(condition, env)
+        project = project_name(env)
+        title = _compose_title(condition, project)
         body = message
         effect = EFFECTS[condition]
-        group = project_name(env) or "Grok"
+        group = project or "Grok"
         if dry_run:
             return {
                 "ok": True,
