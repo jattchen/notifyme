@@ -15,7 +15,11 @@ from pathlib import Path
 
 
 def _resolver():
-    grok = Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
+    override = os.environ.get("GROK_HOME")
+    if override:
+        grok = Path(override).expanduser()
+    else:
+        grok = Path.home() / ".grok"
     installed = grok / "installed-plugins"
     try:
         candidates = list(installed.glob("notify-me-*"))
