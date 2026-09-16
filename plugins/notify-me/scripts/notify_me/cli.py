@@ -18,6 +18,10 @@ def _emit(payload, exit_code):
     return exit_code
 
 
+_FLAG_OPTIONS = {"dry-run"}
+_VALUE_OPTIONS = {"message"}
+
+
 def _options(tokens):
     parsed = {}
     index = 0
@@ -25,15 +29,17 @@ def _options(tokens):
         token = tokens[index]
         if not token.startswith("--"):
             raise NotifyMeError("invalid_arguments", "命令参数格式无效")
-        name = token[2:].replace("-", "_")
-        if not name:
-            raise NotifyMeError("invalid_arguments", "命令参数格式无效")
-        if index + 1 < len(tokens) and not tokens[index + 1].startswith("--"):
-            parsed[name] = tokens[index + 1]
+        raw_name = token[2:]
+        if raw_name in _FLAG_OPTIONS:
+            parsed[raw_name.replace("-", "_")] = True
+            index += 1
+        elif raw_name in _VALUE_OPTIONS:
+            if index + 1 >= len(tokens) or tokens[index + 1].startswith("--"):
+                raise NotifyMeError("invalid_arguments", "命令参数格式无效")
+            parsed[raw_name.replace("-", "_")] = tokens[index + 1]
             index += 2
         else:
-            parsed[name] = True
-            index += 1
+            raise NotifyMeError("invalid_arguments", "命令参数格式无效")
     return parsed
 
 
