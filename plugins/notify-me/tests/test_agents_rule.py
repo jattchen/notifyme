@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 from notify_me.agents_rule import (  # noqa: E402
     MANAGED_VERSION,
     commit,
+    has_managed_block,
     managed_block,
     plan,
 )
@@ -116,6 +117,15 @@ class AgentsRuleTests(unittest.TestCase):
         self.assertIn("keep \\1 and \\\\ here", text)
         self.assertNotIn("\nold\n", text)
 
+    def test_has_managed_block_false_for_start_only_leftover(self):
+        path = Path(self.tmpdir.name) / "AGENTS.md"
+        path.write_text(
+            "<!-- notify-me:managed:start version={} -->\n".format(MANAGED_VERSION),
+            encoding="utf-8",
+        )
+        self.assertFalse(has_managed_block())
+        self.assertFalse(has_managed_block(path.read_text(encoding="utf-8")))
+
 
 class CliTests(unittest.TestCase):
     def setUp(self):
@@ -175,6 +185,22 @@ class CliTests(unittest.TestCase):
         payload = json.loads(buf.getvalue())
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "plan")
+
+    def test_doctor_agents_managed_false_for_start_only_leftover(self):
+        from io import StringIO
+        from unittest import mock
+
+        Path(self.tmpdir.name).joinpath("AGENTS.md").write_text(
+            "<!-- notify-me:managed:start version={} -->\n".format(MANAGED_VERSION),
+            encoding="utf-8",
+        )
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        self.assertEqual(code, 0)
+        payload = json.loads(buf.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["agents_managed"])
 
     def _bound_deliverer(self):
         binding = Binding(Path(self.tmpdir.name))
