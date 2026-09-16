@@ -15,11 +15,11 @@ disable-model-invocation: true
 未装完时也可在已打开的终端执行：
 
 ```text
-python3 ~/.grok/installed-plugins/notify-me-*/scripts/notify_me.py install
+python3 ~/.grok/notify-me install
 ```
 
 ## 诊断
 
 ```text
-python3 ~/.grok/installed-plugins/notify-me-*/scripts/notify_me.py doctor
+python3 ~/.grok/notify-me doctor
 ```

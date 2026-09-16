@@ -10,7 +10,7 @@ from .bark import BarkEndpoint
 from .binding import Binding
 from .deliver import Deliverer
 from .errors import NotifyMeError
-from .paths import installed_plugin_root
+from .paths import installed_plugin_root, stable_entry_path, write_stable_entry
 
 
 REPO = "jattchen/notifyme"
@@ -79,6 +79,7 @@ def _ensure_plugin():
             "plugin_install_failed",
             "插件安装后未找到 ~/.grok/installed-plugins/notify-me-*",
         )
+    write_stable_entry()
     return dest
 
 
@@ -136,6 +137,10 @@ def run_install():
         }
     written = commit_agents()
     _say("测试通知已发送。已写入 {}。请新开一局 Grok。".format(written["target"]))
+    entry = write_stable_entry() or stable_entry_path()
+    script = plugin_dir / "scripts" / "notify_me.py"
+    _say("稳定入口：python3 {} doctor".format(entry))
+    _say("当前脚本：python3 {} doctor".format(script))
     return {
         "ok": True,
         "status": "installed",
