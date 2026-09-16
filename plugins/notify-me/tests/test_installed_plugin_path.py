@@ -343,6 +343,37 @@ class DocumentedCommandTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotEqual(payload.get("error", {}).get("message"), "leftover")
 
+    def test_stable_entry_resolves_when_grok_home_uses_tilde(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            grok = home / "custom"
+            plugin = _make_real_plugin(
+                grok / "installed-plugins",
+                "notify-me-current",
+            )
+            entry = notify_me_paths.write_stable_entry(grok)
+            self.assertIsNotNone(entry)
+            self.assertTrue(plugin.is_dir())
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["GROK_HOME"] = "~/custom"
+            env["GROK_NOTIFY_ME_HOME"] = str(home / "state")
+            result = subprocess.run(
+                [sys.executable, str(entry), "doctor"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotIn(
+                "notify-me is not installed",
+                result.stderr,
+                result.stderr,
+            )
+            payload = json.loads(result.stdout or "{}")
+            self.assertTrue(payload.get("ok"), result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class InstallShResolverTests(unittest.TestCase):
     def setUp(self):
