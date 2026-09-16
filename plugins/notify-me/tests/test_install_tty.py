@@ -107,6 +107,15 @@ class PipedInstallShTests(unittest.TestCase):
         self.assertIn(TTY_REFUSAL, stderr)
         self.assertFalse(self.grok_log.is_file())
 
+    def test_piped_install_sh_removes_gh_fallback_temp_dir(self):
+        scratch = Path(self.tmpdir.name) / "scratch"
+        scratch.mkdir()
+        self.env["TMPDIR"] = str(scratch)
+        returncode, stderr = _run_piped_install_sh(self.env, stdout_tty=True)
+        self.assertNotEqual(returncode, 0, stderr)
+        leftovers = [path.name for path in scratch.iterdir()]
+        self.assertEqual(leftovers, [])
+
 
 class TtyStdout(StringIO):
     def isatty(self):
