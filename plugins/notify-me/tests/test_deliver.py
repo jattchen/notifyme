@@ -143,6 +143,38 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(second["status"], "deduplicated")
         self.assertEqual(self.transport.calls, 1)
 
+    def test_corrupt_accepted_json_does_not_repost_across_deliverers(self):
+        first = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertEqual(first["status"], "accepted")
+        self.assertTrue(first["ok"])
+        accepted_path = Path(self.tmpdir.name) / "accepted.json"
+        accepted_path.write_text("{not-valid-json", encoding="utf-8")
+        other = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=self.transport,
+        )
+        try:
+            second = other.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                }
+            )
+        except NotifyMeError:
+            self.assertEqual(self.transport.calls, 1)
+            return
+        self.assertNotEqual(second.get("status"), "accepted")
+        self.assertEqual(self.transport.calls, 1)
+
     def test_answer_then_done_same_incident_both_accepted(self):
         first = self.deliverer.send(
             {

@@ -192,17 +192,34 @@ class Deliverer:
             pass
         return paths
 
-    def _read_accepted_keys(self, path):
+    def _read_accepted_keys(self, path, fail_closed=False):
         keys = set()
         try:
             raw = path.read_text(encoding="utf-8")
-        except OSError:
+        except FileNotFoundError:
+            return keys
+        except (OSError, UnicodeError):
+            if fail_closed:
+                raise NotifyMeError(
+                    "invalid_accepted",
+                    "accepted.json 无法作为记录列表读取",
+                )
             return keys
         try:
             data = json.loads(raw)
         except ValueError:
+            if fail_closed:
+                raise NotifyMeError(
+                    "invalid_accepted",
+                    "accepted.json 无法作为记录列表读取",
+                )
             return keys
         if not isinstance(data, list):
+            if fail_closed:
+                raise NotifyMeError(
+                    "invalid_accepted",
+                    "accepted.json 无法作为记录列表读取",
+                )
             return keys
         for item in data:
             if (
@@ -215,12 +232,20 @@ class Deliverer:
 
     def _load_accepted(self):
         keys = set(self._accepted)
+        accepted_path = self._accepted_path()
+        corrupt = False
         for path in self._accepted_persist_paths():
-            keys.update(self._read_accepted_keys(path))
-        return keys
+            if path == accepted_path:
+                try:
+                    keys.update(self._read_accepted_keys(path, fail_closed=True))
+                except NotifyMeError:
+                    corrupt = True
+            else:
+                keys.update(self._read_accepted_keys(path))
+        return keys, corrupt
 
     def _record_accepted(self, key):
-        keys = self._load_accepted()
+        keys, _corrupt = self._load_accepted()
         keys.add(key)
         self._accepted = keys
         home = self.binding.home
@@ -267,13 +292,19 @@ class Deliverer:
         message = _required(params, "message")
         dry_run = bool((params or {}).get("dry_run"))
         key = (item_id, state, condition)
-        if key in self._load_accepted():
+        accepted_keys, accepted_corrupt = self._load_accepted()
+        if key in accepted_keys:
             return {
                 "ok": True,
                 "status": "deduplicated",
                 "item_id": item_id,
                 "state": state,
             }
+        if accepted_corrupt:
+            raise NotifyMeError(
+                "invalid_accepted",
+                "accepted.json 无法作为记录列表读取",
+            )
         project = project_name(env)
         title = _compose_title(condition, project)
         body = message
