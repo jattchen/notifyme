@@ -202,6 +202,20 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "plan")
 
+    def test_agents_rule_commit_dry_run_does_not_write_agents(self):
+        from io import StringIO
+        from unittest import mock
+
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["agents-rule", "commit", "--dry-run"])
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertNotEqual(payload["status"], "committed")
+        self.assertEqual(payload["status"], "dry_run")
+        self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
+
     def test_doctor_agents_managed_false_for_start_only_leftover(self):
         from io import StringIO
         from unittest import mock
