@@ -65,10 +65,13 @@ def _ensure_plugin():
                     "无法安装插件。请确认已登录 GitHub CLI（gh），或仓库已公开。",
                 )
             tmp = Path(tempfile.mkdtemp(prefix="notify-me-install-"))
-            _run(["gh", "repo", "clone", REPO, str(tmp / "src")])
-            _run(
-                ["grok", "plugin", "install", str(tmp / "src" / "plugins" / "notify-me"), "--trust"]
-            )
+            try:
+                _run(["gh", "repo", "clone", REPO, str(tmp / "src")])
+                _run(
+                    ["grok", "plugin", "install", str(tmp / "src" / "plugins" / "notify-me"), "--trust"]
+                )
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
     _run(["grok", "plugin", "enable", "notify-me"], check=False)
     dest = installed_plugin_root()
     if dest is None:

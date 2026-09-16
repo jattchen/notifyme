@@ -16,8 +16,11 @@ else
     exit 1
   fi
   tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
   gh repo clone jattchen/notifyme "$tmp/src"
   grok plugin install "$tmp/src/plugins/notify-me" --trust
+  rm -rf "$tmp"
+  trap - EXIT
 fi
 
 grok plugin enable notify-me >/dev/null 2>&1 || true

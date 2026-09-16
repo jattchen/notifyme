@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +13,8 @@ SCRIPTS = ROOT / "scripts"
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SCRIPTS))
 
-from notify_me.install import _ensure_mcp  # noqa: E402
+from notify_me.errors import NotifyMeError  # noqa: E402
+from notify_me.install import _ensure_mcp, _ensure_plugin  # noqa: E402
 from notify_me.paths import installed_plugin_root  # noqa: E402
 
 DOCUMENTED_SCRIPT = "~/.grok/installed-plugins/notify-me-*/scripts/notify_me.py"
@@ -421,3 +423,54 @@ class EnsureMcpUpgradeTests(unittest.TestCase):
         result = _run_install_sh_mcp_register(self.new_plugin, self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self._assert_mcp_rewritten_to_current_plugin()
+
+
+class GhFallbackTempCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.bindir = self.root / "bin"
+        self.bindir.mkdir()
+        self.grok_home = self.root / "grok-home"
+        (self.grok_home / "installed-plugins").mkdir(parents=True)
+        grok = self.bindir / "grok"
+        grok.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        grok.chmod(0o755)
+        gh = self.bindir / "gh"
+        gh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        gh.chmod(0o755)
+        self._old = {
+            "PATH": os.environ.get("PATH"),
+            "GROK_HOME": os.environ.get("GROK_HOME"),
+        }
+        os.environ["PATH"] = "{}:/usr/bin:/bin".format(self.bindir)
+        os.environ["GROK_HOME"] = str(self.grok_home)
+
+    def tearDown(self):
+        for key, value in self._old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.tmpdir.cleanup()
+
+    def test_gh_clone_fallback_removes_temp_dir_after_clone_fails(self):
+        created = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def tracking_mkdtemp(*args, **kwargs):
+            path = real_mkdtemp(*args, **kwargs)
+            created.append(path)
+            return path
+
+        with mock.patch(
+            "notify_me.install.tempfile.mkdtemp",
+            side_effect=tracking_mkdtemp,
+        ):
+            with self.assertRaises(NotifyMeError):
+                _ensure_plugin()
+        self.assertTrue(created, "gh-clone fallback should create a temp dir")
+        self.assertFalse(
+            Path(created[0]).exists(),
+            "fallback temp clone should be deleted after failure",
+        )
