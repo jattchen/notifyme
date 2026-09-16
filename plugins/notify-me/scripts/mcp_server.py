@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""stdio MCP server. Grok's MCP client is rmcp and speaks NDJSON on stdio."""
+"""stdio MCP server. Grok's MCP client is rmcp and speaks NDJSON on stdio.
+
+Content-Length/LSP frames are not a supported transport. A header line is
+just another NDJSON line (usually a Parse error) so a bad or oversized
+length cannot hang or kill the process. Replies are always NDJSON.
+"""
 
 import json
 import os
@@ -38,32 +43,37 @@ def _tool_schema(name):
     return schema
 
 
+_PARSE_ERROR = object()
+
+
 def _read_message():
-    line = sys.stdin.buffer.readline()
-    if not line:
-        return None
-    stripped = line.strip()
-    if not stripped:
-        return _read_message()
-    if stripped.lower().startswith(b"content-length:"):
-        length = int(stripped.split(b":", 1)[1])
-        while True:
-            header = sys.stdin.buffer.readline()
-            if header in (b"", b"\n", b"\r\n"):
-                break
-            if header.lower().startswith(b"content-length:"):
-                length = int(header.split(b":", 1)[1])
-        body = sys.stdin.buffer.read(length)
-        if not body:
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
             return None
-        return json.loads(body.decode("utf-8"))
-    return json.loads(stripped.decode("utf-8"))
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            return json.loads(stripped.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _PARSE_ERROR
 
 
 def _write_message(payload):
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     sys.stdout.buffer.write(encoded + b"\n")
     sys.stdout.buffer.flush()
+
+
+def _write_rpc_error(code, message, msg_id=None):
+    _write_message(
+        {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": code, "message": message},
+        }
+    )
 
 
 def _result_text(data, is_error=False):
@@ -87,6 +97,12 @@ def serve(deliverer=None, tool_name=None):
         message = _read_message()
         if message is None:
             return
+        if message is _PARSE_ERROR:
+            _write_rpc_error(-32700, "Parse error")
+            continue
+        if not isinstance(message, dict):
+            _write_rpc_error(-32600, "Invalid Request")
+            continue
         method = message.get("method")
         msg_id = message.get("id")
         if method == "initialize":
