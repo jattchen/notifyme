@@ -306,7 +306,7 @@ class Deliverer:
                 "attempts": result.attempts,
             }
         return {
-            "ok": True,
+            "ok": False,
             "status": "failed",
             "item_id": item_id,
             "state": state,
@@ -339,7 +339,7 @@ class Deliverer:
         if result.accepted:
             return {"ok": True, "status": "accepted", "attempts": result.attempts}
         return {
-            "ok": True,
+            "ok": False,
             "status": "failed",
             "category": result.category,
             "http_status": result.http_status,
