@@ -181,9 +181,19 @@ class Deliverer:
     def _accepted_path(self):
         return self.binding.home / ACCEPTED_FILENAME
 
-    def _load_accepted(self):
-        keys = set(self._accepted)
-        path = self._accepted_path()
+    def _accepted_persist_paths(self):
+        paths = [self._accepted_path()]
+        home = self.binding.home
+        try:
+            for path in home.iterdir():
+                if path.name.startswith(".accepted.") and path.is_file():
+                    paths.append(path)
+        except OSError:
+            pass
+        return paths
+
+    def _read_accepted_keys(self, path):
+        keys = set()
         try:
             raw = path.read_text(encoding="utf-8")
         except OSError:
@@ -203,6 +213,12 @@ class Deliverer:
                 keys.add((item[0], item[1], item[2]))
         return keys
 
+    def _load_accepted(self):
+        keys = set(self._accepted)
+        for path in self._accepted_persist_paths():
+            keys.update(self._read_accepted_keys(path))
+        return keys
+
     def _record_accepted(self, key):
         keys = self._load_accepted()
         keys.add(key)
@@ -214,14 +230,21 @@ class Deliverer:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
-            os.replace(tmp, self._accepted_path())
+            chmod_private_file(Path(tmp))
         except Exception:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
-            raise
-        chmod_private_file(self._accepted_path())
+            return
+        try:
+            os.replace(tmp, self._accepted_path())
+        except OSError:
+            return
+        try:
+            chmod_private_file(self._accepted_path())
+        except OSError:
+            return
 
     def dispatch(self, params, env=None):
         params = params or {}
@@ -270,7 +293,11 @@ class Deliverer:
         payload = _build_payload(endpoint, title, body, effect, group=group)
         result = self.transport.send_with_retry(endpoint, payload)
         if result.accepted:
-            self._record_accepted(key)
+            self._accepted.add(key)
+            try:
+                self._record_accepted(key)
+            except Exception:
+                pass
             return {
                 "ok": True,
                 "status": "accepted",
