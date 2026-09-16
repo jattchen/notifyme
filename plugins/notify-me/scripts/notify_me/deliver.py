@@ -1,9 +1,12 @@
+import json
 import os
+import tempfile
 from pathlib import Path
 
 from .bark import BarkTransport
 from .binding import Binding
 from .errors import NotifyMeError
+from .paths import chmod_private_file, ensure_private_dir
 
 
 TOOL_NAME = "notify_me"
@@ -36,6 +39,7 @@ EFFECTS = {
 DEFAULT_BARK_ICON_URL = (
     "https://cdn.jsdelivr.net/gh/jattchen/grok-build-bark-icon@main/grok-build-icon.png"
 )
+ACCEPTED_FILENAME = "accepted.json"
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
     "description": TOOL_DESCRIPTION,
@@ -175,6 +179,51 @@ class Deliverer:
         self.transport = transport or BarkTransport()
         self._accepted = set()
 
+    def _accepted_path(self):
+        return self.binding.home / ACCEPTED_FILENAME
+
+    def _load_accepted(self):
+        keys = set(self._accepted)
+        path = self._accepted_path()
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            return keys
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return keys
+        if not isinstance(data, list):
+            return keys
+        for item in data:
+            if (
+                isinstance(item, list)
+                and len(item) == 3
+                and all(isinstance(part, str) for part in item)
+            ):
+                keys.add((item[0], item[1], item[2]))
+        return keys
+
+    def _record_accepted(self, key):
+        keys = self._load_accepted()
+        keys.add(key)
+        self._accepted = keys
+        home = self.binding.home
+        ensure_private_dir(home)
+        payload = json.dumps([list(item) for item in sorted(keys)], ensure_ascii=False)
+        fd, tmp = tempfile.mkstemp(dir=str(home), prefix=".accepted.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+            os.replace(tmp, self._accepted_path())
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        chmod_private_file(self._accepted_path())
+
     def dispatch(self, params, env=None):
         params = params or {}
         op = params.get("op")
@@ -196,7 +245,7 @@ class Deliverer:
         message = _required(params, "message")
         dry_run = bool((params or {}).get("dry_run"))
         key = (item_id, state, condition)
-        if key in self._accepted:
+        if key in self._load_accepted():
             return {
                 "ok": True,
                 "status": "deduplicated",
@@ -221,7 +270,7 @@ class Deliverer:
         payload = _build_payload(endpoint, title, body, effect, group=group)
         result = self.transport.send_with_retry(endpoint, payload)
         if result.accepted:
-            self._accepted.add(key)
+            self._record_accepted(key)
             return {
                 "ok": True,
                 "status": "accepted",
