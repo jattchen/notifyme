@@ -144,9 +144,6 @@ def write_stable_entry(grok_dir=None):
 def ensure_private_dir(path):
     path.mkdir(parents=True, exist_ok=True)
     os.chmod(path, stat.S_IRWXU)
-    mode = path.stat().st_mode
-    if stat.S_IMODE(mode) != 0o700:
-        os.chmod(path, stat.S_IRWXU)
 
 
 def chmod_private_file(path):
