@@ -5,6 +5,41 @@ from pathlib import Path
 
 PLUGIN_DIR_PREFIX = "notify-me-"
 PLUGIN_SCRIPT = Path("scripts") / "notify_me.py"
+STABLE_ENTRY_NAME = "notify-me"
+
+_STABLE_ENTRY_SOURCE = """\
+#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+
+def _resolver():
+    grok = Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
+    installed = grok / "installed-plugins"
+    try:
+        candidates = list(installed.glob("notify-me-*"))
+    except OSError:
+        candidates = []
+    for path in candidates:
+        scripts = path / "scripts"
+        if (scripts / "notify_me" / "paths.py").is_file():
+            if str(scripts) not in sys.path:
+                sys.path.insert(0, str(scripts))
+            from notify_me.paths import installed_plugin_root
+
+            return installed_plugin_root
+    return None
+
+
+resolve = _resolver()
+root = resolve() if resolve is not None else None
+if root is None:
+    sys.stderr.write("notify-me is not installed\\n")
+    raise SystemExit(1)
+script = str(root / "scripts" / "notify_me.py")
+os.execv(sys.executable, [sys.executable, script, *sys.argv[1:]])
+"""
 
 
 def state_home():
@@ -86,6 +121,24 @@ def installed_plugin_root(grok_dir=None):
         mtime_hits.sort()
         return Path(mtime_hits[-1][1])
     return None
+
+
+def stable_entry_path(grok_dir=None):
+    home = Path(grok_dir).expanduser() if grok_dir is not None else grok_home()
+    return home / STABLE_ENTRY_NAME
+
+
+def write_stable_entry(grok_dir=None):
+    root = installed_plugin_root(grok_dir)
+    if root is None:
+        return None
+    dest = stable_entry_path(grok_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink() or dest.exists():
+        dest.unlink()
+    dest.write_text(_STABLE_ENTRY_SOURCE, encoding="utf-8")
+    os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    return dest.resolve()
 
 
 def ensure_private_dir(path):

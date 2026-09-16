@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -16,8 +18,10 @@ sys.path.insert(0, str(SCRIPTS))
 from notify_me.errors import NotifyMeError  # noqa: E402
 from notify_me.install import _ensure_mcp, _ensure_plugin  # noqa: E402
 from notify_me.paths import installed_plugin_root  # noqa: E402
+from notify_me import paths as notify_me_paths  # noqa: E402
 
-DOCUMENTED_SCRIPT = "~/.grok/installed-plugins/notify-me-*/scripts/notify_me.py"
+DOCUMENTED_SCRIPT = "~/.grok/notify-me"
+DOCUMENTED_GLOB = "~/.grok/installed-plugins/notify-me-*/scripts/notify_me.py"
 HARDCODED_HASH = "notify-me-b47b0296"
 LEGACY_PLUGIN = "~/.grok/plugins/notify-me"
 GITHUB_REPO = "jattchen/notifyme"
@@ -43,6 +47,37 @@ def _write_registry(installed, repos):
         json.dumps(payload),
         encoding="utf-8",
     )
+
+
+_TRAP_CLI = """\
+#!/usr/bin/env python3
+import json
+import sys
+sys.stdout.write(json.dumps({
+    "ok": False,
+    "error": {"code": "invalid_arguments", "message": "leftover"},
+}))
+sys.stdout.write("\\n")
+raise SystemExit(1)
+"""
+
+
+def _make_trap_plugin(installed, name, mtime=None):
+    root = _make_plugin(installed, name, mtime=mtime)
+    (root / "scripts" / "notify_me.py").write_text(_TRAP_CLI, encoding="utf-8")
+    return root
+
+
+def _make_real_plugin(installed, name, mtime=None):
+    root = installed / name
+    dest = root / "scripts"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(SCRIPTS, dest)
+    if mtime is not None:
+        os.utime(root, (mtime, mtime))
+        os.utime(dest, (mtime, mtime))
+        os.utime(dest / "notify_me.py", (mtime, mtime))
+    return root.resolve()
 
 
 def _extract_install_sh_resolver():
@@ -218,6 +253,7 @@ class DocumentedCommandTests(unittest.TestCase):
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         for text, label in ((skill, "SKILL.md"), (readme, "README.md")):
             self.assertIn(DOCUMENTED_SCRIPT, text, label)
+            self.assertNotIn(DOCUMENTED_GLOB, text, label)
             self.assertNotIn(LEGACY_PLUGIN, text, label)
             self.assertNotIn(HARDCODED_HASH, text, label)
             self.assertNotIn("api.day.app", text, label)
@@ -244,6 +280,68 @@ class DocumentedCommandTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(Path(expanded).resolve(), plugin / "scripts" / "notify_me.py")
+
+    def test_documented_doctor_hits_current_plugin_when_leftovers_exist(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            grok = home / ".grok"
+            installed = grok / "installed-plugins"
+            leftover = _make_trap_plugin(installed, "notify-me-leftover", mtime=2_000)
+            current = _make_real_plugin(installed, "notify-me-current", mtime=1_000)
+            _write_registry(
+                installed,
+                {
+                    leftover.name: {
+                        "updated_at": "2026-01-01T00:00:00+00:00",
+                        "path": str(leftover),
+                        "plugins": {"other": {"version": "1.0.0"}},
+                    },
+                    current.name: {
+                        "updated_at": "2026-02-01T00:00:00+00:00",
+                        "path": str(current),
+                        "plugins": {"notify-me": {"version": "1.0.0"}},
+                    },
+                },
+            )
+            self.assertEqual(installed_plugin_root(grok), current)
+            self.assertTrue(hasattr(notify_me_paths, "write_stable_entry"))
+            entry = notify_me_paths.write_stable_entry(grok)
+            self.assertIsNotNone(entry)
+
+            skill = (ROOT / "skills" / "notify-me" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            readme = (REPO / "README.md").read_text(encoding="utf-8")
+            match = re.search(r"^python3 (\S+) doctor$", skill, re.M)
+            self.assertIsNotNone(match, "SKILL.md must document a doctor command")
+            command = match.group(0)
+            self.assertNotIn(
+                "notify-me-*",
+                command,
+                "documented doctor must not be an unquoted glob",
+            )
+            self.assertIn(command, skill)
+            self.assertIn(command, readme)
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["GROK_HOME"] = str(grok)
+            env["GROK_NOTIFY_ME_HOME"] = str(home / "state")
+            result = subprocess.run(
+                ["bash", "-lc", command],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(result.stdout or "{}")
+            self.assertNotEqual(
+                payload.get("error", {}).get("code"),
+                "invalid_arguments",
+                result.stdout,
+            )
+            self.assertTrue(payload.get("ok"), result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotEqual(payload.get("error", {}).get("message"), "leftover")
 
 
 class InstallShResolverTests(unittest.TestCase):
