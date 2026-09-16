@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import stat
 import tempfile
 import unittest
@@ -60,7 +61,7 @@ class BarkTests(unittest.TestCase):
         endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
         opener = SequenceOpener(
             [
-                urllib.error.URLError("down"),
+                urllib.error.URLError(ConnectionRefusedError(61, "Connection refused")),
                 FakeResponse(200, b'{"code":200}'),
             ]
         )
@@ -77,6 +78,29 @@ class BarkTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.attempts, 2)
         self.assertEqual(opener.calls, 2)
+
+    def test_timeout_does_not_retry(self):
+        endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        opener = SequenceOpener(
+            [
+                socket.timeout("timed out"),
+                FakeResponse(200, b'{"code":200}'),
+            ]
+        )
+        transport = BarkTransport(opener=opener)
+        result = transport.send_with_retry(
+            endpoint,
+            {
+                "device_key": endpoint.key,
+                "title": "任务阻塞",
+                "body": "请查看",
+            },
+            sleep=lambda _delay: None,
+        )
+        self.assertFalse(result.accepted)
+        self.assertFalse(result.retryable)
+        self.assertEqual(result.attempts, 1)
+        self.assertEqual(opener.calls, 1)
 
     def test_permanent_failure_does_not_retry(self):
         endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")

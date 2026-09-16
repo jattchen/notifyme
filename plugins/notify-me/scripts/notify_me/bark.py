@@ -1,5 +1,6 @@
 """Bark Server API V2 client. Official contract: POST {server}/push JSON."""
 
+import errno
 import http.client
 import json
 import re
@@ -133,6 +134,53 @@ def _classify_http_status(status):
     return False, "permanent_http"
 
 
+_TIMEOUT_TYPES = (socket.timeout, TimeoutError)
+_CONNECTION_STAGE_TYPES = (ConnectionRefusedError, socket.gaierror)
+_CONNECTION_STAGE_ERRNOS = {
+    code
+    for code in (
+        errno.ECONNREFUSED,
+        errno.EHOSTUNREACH,
+        errno.ENETUNREACH,
+        getattr(socket, "EAI_AGAIN", None),
+        getattr(socket, "EAI_FAIL", None),
+        getattr(socket, "EAI_NODATA", None),
+        getattr(socket, "EAI_NONAME", None),
+    )
+    if code is not None
+}
+
+
+def _is_timeout_error(exc):
+    if isinstance(exc, _TIMEOUT_TYPES):
+        return True
+    if isinstance(exc, str):
+        return "timed out" in exc.lower()
+    reason = getattr(exc, "reason", None)
+    if reason is not None and reason is not exc:
+        return _is_timeout_error(reason)
+    return False
+
+
+def _is_connection_stage_error(exc):
+    if isinstance(exc, _CONNECTION_STAGE_TYPES):
+        return True
+    if isinstance(exc, OSError) and exc.errno in _CONNECTION_STAGE_ERRNOS:
+        return True
+    reason = getattr(exc, "reason", None)
+    if reason is not None and reason is not exc:
+        return _is_connection_stage_error(reason)
+    return False
+
+
+def _classify_transport_error(exc):
+    if _is_timeout_error(exc):
+        return False, "timeout"
+    if _is_connection_stage_error(exc):
+        return True, "network_error"
+    return False, "network_error"
+
+
 class BarkTransport:
     def __init__(self, timeout=3.0, opener=None):
         self.timeout = timeout
@@ -169,8 +217,9 @@ class BarkTransport:
                 exc.close()
             retryable, category = _classify_http_status(status)
             return TransportResult(False, retryable, category, status)
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError, http.client.HTTPException):
-            return TransportResult(False, True, "network_error")
+        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError, http.client.HTTPException) as exc:
+            retryable, category = _classify_transport_error(exc)
+            return TransportResult(False, retryable, category)
         if status < 200 or status >= 300:
             retryable, category = _classify_http_status(status)
             return TransportResult(False, retryable, category, status)
