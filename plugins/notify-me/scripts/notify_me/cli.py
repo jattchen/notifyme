@@ -49,6 +49,8 @@ def _setup(options):
             "tty_required",
             "setup 必须在终端里输入 Bark 地址，不要把 URL 发到对话里",
         )
+    if options.get("dry_run"):
+        return {"ok": True, "status": "dry_run"}
     raw = getpass.getpass("请粘贴 Bark 推送 URL（输入不可见）：")
     endpoint = BarkEndpoint.parse(raw)
     view = Binding().save(endpoint)
