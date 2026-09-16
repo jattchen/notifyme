@@ -1,12 +1,60 @@
+import fcntl
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 from .bark import BarkTransport
 from .binding import Binding
 from .errors import NotifyMeError
 from .paths import chmod_private_file, ensure_private_dir
+
+_THREAD_SEND_LOCK = threading.RLock()
+ACCEPTED_LOCK_FILENAME = "accepted.lock"
+
+
+class _AcceptedSendLock:
+    def __init__(self, home):
+        self._home = home
+        self._fd = None
+
+    def __enter__(self):
+        _THREAD_SEND_LOCK.acquire()
+        try:
+            ensure_private_dir(self._home)
+            path = self._home / ACCEPTED_LOCK_FILENAME
+            self._fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                chmod_private_file(path)
+            except OSError:
+                pass
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except Exception:
+            if self._fd is not None:
+                try:
+                    os.close(self._fd)
+                except OSError:
+                    pass
+                self._fd = None
+            _THREAD_SEND_LOCK.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        fd = self._fd
+        self._fd = None
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _THREAD_SEND_LOCK.release()
+        return False
 
 
 TOOL_NAME = "notify_me"
@@ -292,59 +340,60 @@ class Deliverer:
         message = _required(params, "message")
         dry_run = bool((params or {}).get("dry_run"))
         key = (item_id, state, condition)
-        accepted_keys, accepted_corrupt = self._load_accepted()
-        if key in accepted_keys:
+        with _AcceptedSendLock(self.binding.home):
+            accepted_keys, accepted_corrupt = self._load_accepted()
+            if key in accepted_keys:
+                return {
+                    "ok": True,
+                    "status": "deduplicated",
+                    "item_id": item_id,
+                    "state": state,
+                }
+            if accepted_corrupt:
+                raise NotifyMeError(
+                    "invalid_accepted",
+                    "accepted.json 无法作为记录列表读取",
+                )
+            project = project_name(env)
+            title = _compose_title(condition, project)
+            body = message
+            effect = EFFECTS[condition]
+            group = project or "Grok"
+            if dry_run:
+                return {
+                    "ok": True,
+                    "status": "dry_run",
+                    "condition": condition,
+                    "item_id": item_id,
+                    "state": state,
+                    "title": title,
+                    "body": body,
+                }
+            endpoint = self.binding.load()
+            payload = _build_payload(endpoint, title, body, effect, group=group)
+            result = self.transport.send_with_retry(endpoint, payload)
+            if result.accepted:
+                self._accepted.add(key)
+                try:
+                    self._record_accepted(key)
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "status": "accepted",
+                    "item_id": item_id,
+                    "state": state,
+                    "attempts": result.attempts,
+                }
             return {
-                "ok": True,
-                "status": "deduplicated",
+                "ok": False,
+                "status": "failed",
                 "item_id": item_id,
                 "state": state,
-            }
-        if accepted_corrupt:
-            raise NotifyMeError(
-                "invalid_accepted",
-                "accepted.json 无法作为记录列表读取",
-            )
-        project = project_name(env)
-        title = _compose_title(condition, project)
-        body = message
-        effect = EFFECTS[condition]
-        group = project or "Grok"
-        if dry_run:
-            return {
-                "ok": True,
-                "status": "dry_run",
-                "condition": condition,
-                "item_id": item_id,
-                "state": state,
-                "title": title,
-                "body": body,
-            }
-        endpoint = self.binding.load()
-        payload = _build_payload(endpoint, title, body, effect, group=group)
-        result = self.transport.send_with_retry(endpoint, payload)
-        if result.accepted:
-            self._accepted.add(key)
-            try:
-                self._record_accepted(key)
-            except Exception:
-                pass
-            return {
-                "ok": True,
-                "status": "accepted",
-                "item_id": item_id,
-                "state": state,
+                "category": result.category,
+                "http_status": result.http_status,
                 "attempts": result.attempts,
             }
-        return {
-            "ok": False,
-            "status": "failed",
-            "item_id": item_id,
-            "state": state,
-            "category": result.category,
-            "http_status": result.http_status,
-            "attempts": result.attempts,
-        }
 
     def test(self, params, env=None):
         dry_run = bool((params or {}).get("dry_run"))

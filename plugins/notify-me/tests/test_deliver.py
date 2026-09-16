@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -113,6 +115,70 @@ class DeliverTests(unittest.TestCase):
         )
         self.assertEqual(second["status"], "deduplicated")
         self.assertEqual(self.transport.calls, 1)
+
+    def test_overlapping_sends_same_key_post_once(self):
+        started = threading.Event()
+        release = threading.Event()
+        count_lock = threading.Lock()
+
+        class DelayedTransport:
+            def __init__(self):
+                self.payloads = []
+                self.calls = 0
+
+            def send_with_retry(self, endpoint, payload, sleep=None, max_attempts=2):
+                assert payload.get("device_key") == endpoint.key
+                assert payload.get("body")
+                with count_lock:
+                    self.calls += 1
+                    self.payloads.append(
+                        {key: value for key, value in payload.items() if key != "device_key"}
+                    )
+                started.set()
+                if not release.wait(timeout=5):
+                    raise AssertionError("transport gate was not released")
+                return TransportResult(True, False, "accepted", 200, 1)
+
+        transport = DelayedTransport()
+        first = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=transport,
+        )
+        second = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=transport,
+        )
+        params = {
+            "condition": "answer",
+            "item_id": "wait-token",
+            "state": "missing",
+            "message": "请提供 API token",
+        }
+        results = [None, None]
+        errors = [None, None]
+
+        def run(index, deliverer):
+            try:
+                results[index] = deliverer.send(params)
+            except Exception as exc:
+                errors[index] = exc
+
+        worker = threading.Thread(target=run, args=(0, first))
+        overlap = threading.Thread(target=run, args=(1, second))
+        worker.start()
+        self.assertTrue(started.wait(timeout=5))
+        overlap.start()
+        time.sleep(0.3)
+        release.set()
+        worker.join(timeout=5)
+        overlap.join(timeout=5)
+        self.assertIsNone(errors[0])
+        self.assertIsNone(errors[1])
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(overlap.is_alive())
+        self.assertEqual(transport.calls, 1)
+        statuses = sorted(result["status"] for result in results)
+        self.assertEqual(statuses, ["accepted", "deduplicated"])
 
     def test_accepted_persist_survives_replace_failure_across_deliverers(self):
         other = Deliverer(
