@@ -559,6 +559,7 @@ class Deliverer:
         effect = EFFECTS[condition]
         group = project or "Grok"
         reserved = False
+        endpoint = None if dry_run else self.binding.load()
         reservation = _InFlightReservation(self.binding.home, key)
         try:
             while True:
@@ -597,7 +598,6 @@ class Deliverer:
                             _IN_FLIGHT_COND.wait()
                 else:
                     reservation.wait()
-            endpoint = self.binding.load()
             payload = _build_payload(endpoint, title, body, effect, group=group)
             result = self.transport.send_with_retry(endpoint, payload)
             if result.accepted:
