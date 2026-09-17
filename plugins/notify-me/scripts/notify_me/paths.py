@@ -131,7 +131,7 @@ def _mtime_plugin_dirs(installed_root):
     return matches
 
 
-def installed_plugin_root(grok_dir=None):
+def _resolve_installed_plugin_root(grok_dir=None):
     home = Path(grok_dir).expanduser() if grok_dir is not None else grok_home()
     installed = home / "installed-plugins"
     registry_hits = _registry_plugin_dirs(installed)
@@ -145,13 +145,23 @@ def installed_plugin_root(grok_dir=None):
     return None
 
 
+def installed_plugin_root(grok_dir=None):
+    root = _resolve_installed_plugin_root(grok_dir)
+    if root is not None:
+        try:
+            write_stable_entry(grok_dir)
+        except OSError:
+            pass
+    return root
+
+
 def stable_entry_path(grok_dir=None):
     home = Path(grok_dir).expanduser() if grok_dir is not None else grok_home()
     return home / STABLE_ENTRY_NAME
 
 
 def write_stable_entry(grok_dir=None):
-    root = installed_plugin_root(grok_dir)
+    root = _resolve_installed_plugin_root(grok_dir)
     if root is None:
         return None
     dest = stable_entry_path(grok_dir)
