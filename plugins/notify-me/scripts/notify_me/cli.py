@@ -62,7 +62,7 @@ def _doctor(deliverer):
     try:
         binding = binding_store.load().public_view()
     except NotifyMeError as exc:
-        if exc.code == "insecure_binding":
+        if exc.code in ("insecure_binding", "invalid_binding"):
             raise
         binding = binding_store.public_view()
     agents = grok_home() / "AGENTS.md"
