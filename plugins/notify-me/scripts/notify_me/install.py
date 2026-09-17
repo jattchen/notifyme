@@ -179,6 +179,15 @@ def run_install():
     _say("已绑定 {}。正在发送测试通知…".format(view["host"]))
     tested = Deliverer().test({})
     if tested.get("status") != "accepted":
+        if tested.get("category") in ("timeout", "network_error"):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "test_unconfirmed",
+                    "message": "测试通知超时或未能连接，绑定已保留",
+                    "result": tested,
+                },
+            }
         _restore_previous_binding(binding, previous)
         return {
             "ok": False,
