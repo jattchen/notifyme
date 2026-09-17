@@ -117,6 +117,24 @@ class AgentsRuleTests(unittest.TestCase):
         self.assertNotIn("<!-- notify-me:managed:start version=grok-1 -->", text)
         self.assertNotIn("leftover chunk", text)
 
+    def test_commit_follows_agents_symlink_instead_of_replacing_it(self):
+        home = Path(self.tmpdir.name)
+        target = home / "dotfiles" / "AGENTS.md"
+        target.parent.mkdir()
+        target.write_text("# 来自 dotfiles\n", encoding="utf-8")
+        path = home / "AGENTS.md"
+        path.symlink_to(target)
+        self.assertTrue(path.is_symlink())
+
+        result = commit()
+
+        self.assertEqual(result["status"], "committed")
+        self.assertTrue(path.is_symlink(), "commit must not replace AGENTS.md symlink with a regular file")
+        self.assertEqual(path.resolve(), target.resolve())
+        text = target.read_text(encoding="utf-8")
+        self.assertIn(managed_block(), text)
+        self.assertIn("# 来自 dotfiles", text)
+
     def test_commit_writes_backslash_body_literally(self):
         from unittest import mock
 
