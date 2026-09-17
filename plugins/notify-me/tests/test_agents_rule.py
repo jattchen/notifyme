@@ -603,9 +603,13 @@ class CliTests(unittest.TestCase):
             "<!-- notify-me:managed:start version={} -->\n".format(MANAGED_VERSION),
             encoding="utf-8",
         )
+        old_path = self._install_current_plugin_grok()
         buf = StringIO()
-        with mock.patch("sys.stdout", buf):
-            code = main(["doctor"])
+        try:
+            with mock.patch("sys.stdout", buf):
+                code = main(["doctor"])
+        finally:
+            self._restore_grok_path(old_path)
         self.assertEqual(code, 0)
         payload = json.loads(buf.getvalue())
         self.assertTrue(payload["ok"])
@@ -701,9 +705,13 @@ class CliTests(unittest.TestCase):
         from io import StringIO
         from unittest import mock
 
+        old_path = self._install_current_plugin_grok()
         buf = StringIO()
-        with mock.patch("sys.stdout", buf):
-            code = main(["doctor"])
+        try:
+            with mock.patch("sys.stdout", buf):
+                code = main(["doctor"])
+        finally:
+            self._restore_grok_path(old_path)
         payload = json.loads(buf.getvalue())
         self.assertEqual(code, 0)
         self.assertTrue(payload["ok"])
@@ -776,6 +784,70 @@ exit 0
         self.assertNotIn("state_home", buf.getvalue())
         self.assertFalse(mutate_log.exists())
 
+    def test_doctor_missing_plugin_dest_is_not_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        Binding(Path(self.tmpdir.name)).save(
+            BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        )
+        Path(self.tmpdir.name).joinpath("AGENTS.md").write_text(
+            managed_block() + "\n",
+            encoding="utf-8",
+        )
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")),
+            "doctor must not treat a missing plugin dest as ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertEqual(payload.get("error", {}).get("code"), "plugin_missing")
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+
+    def test_doctor_unreadable_mcp_list_is_not_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        home = Path(self.tmpdir.name)
+        current = home / "installed-plugins" / "notify-me-current"
+        scripts = current / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "notify_me.py").write_text("# notify-me\n", encoding="utf-8")
+        (scripts / "mcp_server.py").write_text("# mcp\n", encoding="utf-8")
+        package = scripts / "notify_me"
+        package.mkdir()
+        (package / "paths.py").write_text("# paths\n", encoding="utf-8")
+        Binding(home).save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
+        (home / "AGENTS.md").write_text(managed_block() + "\n", encoding="utf-8")
+        bindir = home / "bin"
+        bindir.mkdir()
+        buf = StringIO()
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = str(bindir)
+        try:
+            with mock.patch("sys.stdout", buf):
+                code = main(["doctor"])
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")),
+            "doctor must not treat an unreadable MCP list as ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertEqual(payload.get("error", {}).get("code"), "mcp_unreadable")
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+
     def test_doctor_symlink_binding_is_not_unbound_ok(self):
         from io import StringIO
         from unittest import mock
@@ -808,6 +880,48 @@ exit 0
         binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
         transport = _CountTransport()
         return Deliverer(binding=binding, transport=transport), transport
+
+    def _install_current_plugin_grok(self, listed=None):
+        home = Path(self.tmpdir.name)
+        current = home / "installed-plugins" / "notify-me-current"
+        scripts = current / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "notify_me.py").write_text("# notify-me\n", encoding="utf-8")
+        (scripts / "mcp_server.py").write_text("# mcp\n", encoding="utf-8")
+        package = scripts / "notify_me"
+        package.mkdir()
+        (package / "paths.py").write_text("# paths\n", encoding="utf-8")
+        server = current.resolve() / "scripts" / "mcp_server.py"
+        if listed is None:
+            listed = (
+                "  notify_me: python3 -u {0}\n"
+                "  notifyme: python3 -u {0} --name notifyme\n"
+            ).format(server)
+        bindir = home / "bin"
+        bindir.mkdir(exist_ok=True)
+        grok = bindir / "grok"
+        grok.write_text(
+            """#!/bin/sh
+if [ "$1" = mcp ] && [ "$2" = list ]; then
+  printf '%s\\n' "$GROK_MCP_LIST"
+  exit 0
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        grok.chmod(0o755)
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = "{}:{}".format(bindir, old_path or "")
+        os.environ["GROK_MCP_LIST"] = listed
+        return old_path
+
+    def _restore_grok_path(self, old_path):
+        if old_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = old_path
+        os.environ.pop("GROK_MCP_LIST", None)
 
     def test_options_rejects_misspelled_dry_run(self):
         with self.assertRaises(NotifyMeError) as caught:
