@@ -1,6 +1,8 @@
+import errno
 import fcntl
 import json
 import os
+import stat
 import tempfile
 import threading
 from pathlib import Path
@@ -8,10 +10,18 @@ from pathlib import Path
 from .bark import BarkTransport
 from .binding import Binding
 from .errors import NotifyMeError
-from .paths import chmod_private_file, ensure_private_dir
+from .paths import chmod_private_file
 
 _THREAD_SEND_LOCK = threading.RLock()
 ACCEPTED_LOCK_FILENAME = "accepted.lock"
+
+
+def _is_private_regular_file(path):
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and not (stat.S_IMODE(info.st_mode) & 0o077)
 
 
 class _AcceptedSendLock:
@@ -22,14 +32,36 @@ class _AcceptedSendLock:
     def __enter__(self):
         _THREAD_SEND_LOCK.acquire()
         try:
-            ensure_private_dir(self._home)
-            path = self._home / ACCEPTED_LOCK_FILENAME
-            self._fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
-            try:
-                chmod_private_file(path)
-            except OSError:
-                pass
-            fcntl.flock(self._fd, fcntl.LOCK_EX)
+            home = self._home
+            if home.exists():
+                if stat.S_IMODE(home.stat().st_mode) & 0o077:
+                    raise NotifyMeError("insecure_binding", "Bark 状态目录权限过宽")
+                path = home / ACCEPTED_LOCK_FILENAME
+                if path.is_symlink():
+                    raise NotifyMeError("insecure_binding", "accepted.lock 不能是符号链接")
+                flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+                try:
+                    self._fd = os.open(str(path), flags, 0o600)
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP or path.is_symlink():
+                        raise NotifyMeError(
+                            "insecure_binding",
+                            "accepted.lock 不能是符号链接",
+                        )
+                    raise
+                try:
+                    opened = os.fstat(self._fd)
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise NotifyMeError(
+                            "insecure_binding",
+                            "accepted.lock 不是普通文件",
+                        )
+                    os.fchmod(self._fd, stat.S_IRUSR | stat.S_IWUSR)
+                except NotifyMeError:
+                    raise
+                except OSError:
+                    pass
+                fcntl.flock(self._fd, fcntl.LOCK_EX)
         except Exception:
             if self._fd is not None:
                 try:
@@ -253,7 +285,7 @@ class Deliverer:
         home = self.binding.home
         try:
             for path in home.iterdir():
-                if path.name.startswith(".accepted.") and path.is_file():
+                if path.name.startswith(".accepted.") and _is_private_regular_file(path):
                     paths.append(path)
         except OSError:
             pass
@@ -318,7 +350,6 @@ class Deliverer:
         keys.add(key)
         self._accepted = keys
         home = self.binding.home
-        ensure_private_dir(home)
         payload = json.dumps([list(item) for item in sorted(keys)], ensure_ascii=False)
         fd, tmp = tempfile.mkstemp(dir=str(home), prefix=".accepted.")
         try:

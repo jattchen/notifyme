@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -785,3 +786,39 @@ class DeliverTests(unittest.TestCase):
             payload = self.transport.payloads[-1]
             self.assertEqual(payload["title"], mark)
             self.assertEqual(payload["level"], expected_levels[condition])
+
+    def test_send_rejects_world_writable_state_dir(self):
+        home = Path(self.tmpdir.name)
+        home.chmod(0o777)
+        self.assertEqual(stat.S_IMODE((home / "binding.json").stat().st_mode), 0o600)
+        with self.assertRaises(NotifyMeError) as caught:
+            self.deliverer.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                }
+            )
+        self.assertEqual(caught.exception.code, "insecure_binding")
+        self.assertEqual(self.transport.calls, 0)
+        self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o777)
+
+    def test_planted_accepted_leftover_does_not_suppress_send(self):
+        leftover = Path(self.tmpdir.name) / ".accepted.planted"
+        leftover.write_text(
+            json.dumps([["", "wait-token", "missing", "answer"]]),
+            encoding="utf-8",
+        )
+        leftover.chmod(0o644)
+        result = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertEqual(result["status"], "accepted")
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.transport.calls, 1)
