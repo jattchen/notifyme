@@ -166,49 +166,53 @@ def _resolved_path(start):
         return None
 
 
-def _git_root_name(start, home):
+def _workspace_root(start, home):
     path = _resolved_path(start)
     if path is None or path == home:
         return None
     current = path
     while True:
         if (current / ".git").exists() and current != home:
-            return current.name
+            return current
         if current.parent == current:
-            return None
+            break
         current = current.parent
-
-
-def _directory_name(start, home):
-    path = _resolved_path(start)
-    if path is None or path == home:
-        return None
     try:
-        if not path.is_dir():
-            return None
+        if path.is_dir():
+            return path
     except OSError:
         return None
-    return path.name or None
+    return None
 
 
-def _project_from(start, home):
-    return _git_root_name(start, home) or _directory_name(start, home)
-
-
-def project_name(env=None):
+def _workspace_from_env(env):
     env = env or os.environ
     home = Path.home().resolve()
     explicit = env.get("GROK_WORKSPACE_ROOT") or env.get("CLAUDE_PROJECT_DIR")
     if explicit:
-        return _project_from(explicit, home)
+        return _workspace_root(explicit, home)
     try:
         cwd = os.getcwd()
     except OSError:
         cwd = None
-    from_cwd = _project_from(cwd, home)
+    from_cwd = _workspace_root(cwd, home)
     if from_cwd:
         return from_cwd
-    return _project_from(env.get("PWD"), home)
+    return _workspace_root(env.get("PWD"), home)
+
+
+def project_name(env=None):
+    root = _workspace_from_env(env)
+    if root is None:
+        return None
+    return root.name or None
+
+
+def workspace_identity(env=None):
+    root = _workspace_from_env(env)
+    if root is None:
+        return ""
+    return str(root)
 
 
 def _compose_title(condition, project=None):
@@ -285,12 +289,14 @@ class Deliverer:
                 )
             return keys
         for item in data:
-            if (
-                isinstance(item, list)
-                and len(item) == 3
-                and all(isinstance(part, str) for part in item)
+            if not isinstance(item, list) or not all(
+                isinstance(part, str) for part in item
             ):
-                keys.add((item[0], item[1], item[2]))
+                continue
+            if len(item) == 4:
+                keys.add((item[0], item[1], item[2], item[3]))
+            elif len(item) == 3:
+                keys.add(("", item[0], item[1], item[2]))
         return keys
 
     def _load_accepted(self):
@@ -354,7 +360,7 @@ class Deliverer:
         state = _required(params, "state")
         message = _required(params, "message")
         dry_run = _dry_run(params)
-        key = (item_id, state, condition)
+        key = (workspace_identity(env), item_id, state, condition)
         with _AcceptedSendLock(self.binding.home):
             accepted_keys, accepted_corrupt = self._load_accepted()
             if key in accepted_keys:
