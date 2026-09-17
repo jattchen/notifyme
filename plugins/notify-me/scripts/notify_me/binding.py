@@ -35,6 +35,8 @@ class Binding:
     def load(self):
         if not self.path.exists():
             raise NotifyMeError("activation_required", "尚未绑定 Bark，请先在终端运行 setup")
+        if self.home.exists() and stat.S_IMODE(self.home.stat().st_mode) & 0o077:
+            raise NotifyMeError("insecure_binding", "Bark 状态目录权限过宽")
         mode = stat.S_IMODE(self.path.stat().st_mode)
         if mode & 0o077:
             raise NotifyMeError("insecure_binding", "Bark 绑定文件权限过宽")

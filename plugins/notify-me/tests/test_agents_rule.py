@@ -254,6 +254,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload.get("error", {}).get("code"), "insecure_binding")
         self.assertNotIn("Abcdefgh1234", buf.getvalue())
 
+    def test_doctor_insecure_state_dir_is_not_bound_ok(self):
+        import stat
+        from io import StringIO
+        from unittest import mock
+
+        Binding(Path(self.tmpdir.name)).save(
+            BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        )
+        home = Path(self.tmpdir.name)
+        path = home / "binding.json"
+        home.chmod(0o777)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")) and payload.get("bound") is True,
+            "doctor must not treat a world-writable state dir as bound-and-ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("error", {}).get("code"), "insecure_binding")
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+        self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o777)
+
     def _bound_deliverer(self):
         binding = Binding(Path(self.tmpdir.name))
         binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
