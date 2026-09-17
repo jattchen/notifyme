@@ -232,6 +232,28 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertFalse(payload["agents_managed"])
 
+    def test_doctor_insecure_binding_is_not_unbound_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        Binding(Path(self.tmpdir.name)).save(
+            BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        )
+        path = Path(self.tmpdir.name) / "binding.json"
+        path.chmod(0o644)
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")) and payload.get("bound") is False,
+            "doctor must not treat a world-readable binding as unbound-and-ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("error", {}).get("code"), "insecure_binding")
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+
     def _bound_deliverer(self):
         binding = Binding(Path(self.tmpdir.name))
         binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
