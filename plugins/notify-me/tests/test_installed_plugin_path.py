@@ -287,6 +287,39 @@ class InstalledPluginRootTests(unittest.TestCase):
         self.assertNotIn("b47b0296", str(found))
 
 
+class WriteStableEntryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmpdir.name)
+        self.installed = self.home / "installed-plugins"
+        self.installed.mkdir()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_failed_rewrite_keeps_existing_stable_entry(self):
+        _make_plugin(self.installed, "notify-me-abc123")
+        dest = notify_me_paths.stable_entry_path(self.home)
+        old_contents = "#!/usr/bin/env python3\n# previous-stable-entry\n"
+        dest.write_text(old_contents, encoding="utf-8")
+        os.chmod(dest, 0o700)
+
+        def fail_write(*args, **kwargs):
+            raise OSError("disk full")
+
+        with mock.patch.object(Path, "write_text", side_effect=fail_write):
+            with mock.patch(
+                "notify_me.paths.os.replace",
+                side_effect=fail_write,
+            ):
+                with self.assertRaises(OSError):
+                    notify_me_paths.write_stable_entry(self.home)
+
+        self.assertTrue(dest.is_file())
+        self.assertEqual(dest.read_text(encoding="utf-8"), old_contents)
+        self.assertTrue(os.access(dest, os.X_OK))
+
+
 class DualMcpNameInstallTests(unittest.TestCase):
     def test_install_py_adds_notifyme_and_keeps_notify_me(self):
         text = (SCRIPTS / "notify_me" / "install.py").read_text(encoding="utf-8")
