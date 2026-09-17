@@ -70,6 +70,13 @@ class BarkEndpoint:
         if not host:
             raise NotifyMeError("invalid_bark_url", "Bark 地址缺少主机")
         host = host.lower().rstrip(".")
+        try:
+            host.encode("ascii")
+        except UnicodeEncodeError:
+            try:
+                host = host.encode("idna").decode("ascii")
+            except UnicodeError:
+                raise NotifyMeError("invalid_bark_url", "Bark 地址的主机或端口无效")
         if parsed.scheme.lower() == "http" and host not in ("localhost", "127.0.0.1", "::1"):
             raise NotifyMeError("insecure_bark_url", "生产 Bark 地址必须使用 HTTPS")
         raw_path = parsed.path or ""
