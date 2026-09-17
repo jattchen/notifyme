@@ -77,9 +77,15 @@ NOTIFY_ME_RESOLVE_PLUGIN
 
   mcp_list="$(grok mcp list 2>/dev/null || true)"
   if ! printf '%s\n' "$mcp_list" | grep '^[[:space:]]*notify_me:' | grep -Fq -- "$plugin/scripts/mcp_server.py"; then
+    if printf '%s\n' "$mcp_list" | grep -q '^[[:space:]]*notify_me:'; then
+      grok mcp remove notify_me || true
+    fi
     grok mcp add notify_me -- python3 -u "$plugin/scripts/mcp_server.py"
   fi
   if ! printf '%s\n' "$mcp_list" | grep '^[[:space:]]*notifyme:' | grep -Fq -- "$plugin/scripts/mcp_server.py"; then
+    if printf '%s\n' "$mcp_list" | grep -q '^[[:space:]]*notifyme:'; then
+      grok mcp remove notifyme || true
+    fi
     grok mcp add notifyme -- python3 -u "$plugin/scripts/mcp_server.py" --name notifyme
   fi
 

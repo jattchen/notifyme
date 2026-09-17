@@ -567,7 +567,9 @@ class InstallShResolverTests(unittest.TestCase):
         )
         self.assertIn("notify_me:", text)
         self.assertIn("notifyme:", text)
-        self.assertNotIn("mcp remove notify_me", text)
+        notifyme_idx = text.index("grok mcp add notifyme")
+        notifyme_block = text[text.rfind("if !", 0, notifyme_idx):notifyme_idx]
+        self.assertNotIn("mcp remove notify_me", notifyme_block)
 
     def test_install_sh_resolver_delegates_to_python(self):
         source = _extract_install_sh_resolver()
@@ -656,7 +658,7 @@ if [ "$1" = mcp ] && [ "$2" = list ]; then
   printf '%s\\n' "$GROK_MCP_LIST"
   exit 0
 fi
-if [ "$1" = mcp ] && [ "$2" = add ]; then
+if [ "$1" = mcp ] && { [ "$2" = add ] || [ "$2" = remove ]; }; then
   printf '%s\\n' "$*" >> "$GROK_MCP_ADD_LOG"
   exit 0
 fi
@@ -752,10 +754,56 @@ class EnsureMcpUpgradeTests(unittest.TestCase):
             os.environ.pop("GROK_MCP_ADD_LOG", None)
         self._assert_mcp_rewritten_to_current_plugin()
 
+    def test_ensure_mcp_removes_stale_same_name_before_adding_current_plugin(self):
+        original_path = os.environ.get("PATH")
+        os.environ["PATH"] = self.env["PATH"]
+        os.environ["GROK_MCP_LIST"] = self.env["GROK_MCP_LIST"]
+        os.environ["GROK_MCP_ADD_LOG"] = self.env["GROK_MCP_ADD_LOG"]
+        try:
+            _ensure_mcp(self.new_plugin)
+        finally:
+            if original_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = original_path
+            os.environ.pop("GROK_MCP_LIST", None)
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        logged = self._added_commands()
+        self.assertIn("mcp remove notify_me", logged)
+        self.assertIn("mcp remove notifyme", logged)
+        self.assertIn("mcp add notify_me", logged)
+        self.assertIn("mcp add notifyme", logged)
+        self.assertLess(
+            logged.index("mcp remove notify_me"),
+            logged.index("mcp add notify_me"),
+        )
+        self.assertLess(
+            logged.index("mcp remove notifyme"),
+            logged.index("mcp add notifyme"),
+        )
+        self.assertNotIn(str(self.old_plugin / "scripts" / "mcp_server.py"), logged)
+
     def test_install_sh_rewrites_existing_names_to_current_plugin_dir(self):
         result = _run_install_sh_mcp_register(self.new_plugin, self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self._assert_mcp_rewritten_to_current_plugin()
+
+    def test_install_sh_removes_stale_same_name_before_adding_current_plugin(self):
+        result = _run_install_sh_mcp_register(self.new_plugin, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        logged = self._added_commands()
+        self.assertIn("mcp remove notify_me", logged)
+        self.assertIn("mcp remove notifyme", logged)
+        self.assertIn("mcp add notify_me", logged)
+        self.assertIn("mcp add notifyme", logged)
+        self.assertLess(
+            logged.index("mcp remove notify_me"),
+            logged.index("mcp add notify_me"),
+        )
+        self.assertLess(
+            logged.index("mcp remove notifyme"),
+            logged.index("mcp add notifyme"),
+        )
 
     def test_ensure_mcp_rewrites_notifyme_listing_missing_name_flag(self):
         server = self.new_plugin / "scripts" / "mcp_server.py"
