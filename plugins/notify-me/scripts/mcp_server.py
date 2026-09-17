@@ -90,6 +90,15 @@ def _negotiate_version(params):
     return PROTOCOL_VERSIONS[0]
 
 
+def _object_or_invalid(value):
+    """Missing/None becomes {}. {} stays valid. Falsey non-dicts stay invalid."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    return None
+
+
 def serve(deliverer=None, tool_name=None):
     service = deliverer
     tool_name = TOOL_NAME if tool_name is None else tool_name
@@ -106,8 +115,8 @@ def serve(deliverer=None, tool_name=None):
         method = message.get("method")
         msg_id = message.get("id")
         if method == "initialize":
-            params = message.get("params") or {}
-            if not isinstance(params, dict):
+            params = _object_or_invalid(message.get("params"))
+            if params is None:
                 _write_rpc_error(-32602, "Invalid params", msg_id)
                 continue
             version = _negotiate_version(params)
@@ -133,13 +142,13 @@ def serve(deliverer=None, tool_name=None):
             )
             continue
         if method == "tools/call":
-            params = message.get("params") or {}
-            if not isinstance(params, dict):
+            params = _object_or_invalid(message.get("params"))
+            if params is None:
                 _write_rpc_error(-32602, "Invalid params", msg_id)
                 continue
             name = params.get("name")
-            arguments = params.get("arguments") or {}
-            if not isinstance(arguments, dict):
+            arguments = _object_or_invalid(params.get("arguments"))
+            if arguments is None:
                 _write_rpc_error(-32602, "Invalid params", msg_id)
                 continue
             if name != tool_name:

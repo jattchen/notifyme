@@ -412,6 +412,114 @@ class McpHandshakeTests(unittest.TestCase):
             proc.kill()
             proc.wait(timeout=2)
 
+    def test_falsey_initialize_params_keep_serving(self):
+        home = tempfile.mkdtemp(prefix="notify-me-mcp-")
+        proc = _ndjson_session(home)
+        try:
+            _send_line(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": [],
+                },
+            )
+            reply = _read_line(proc)
+            _assert_rpc_error(self, reply, (-32602,))
+            self.assertEqual(reply.get("id"), 1)
+            self.assertNotIn("result", reply)
+            self.assertTrue(_alive(proc), "falsey initialize params killed the MCP process")
+            _assert_ping(self, proc, 2)
+        finally:
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream:
+                    stream.close()
+            proc.kill()
+            proc.wait(timeout=2)
+
+    def test_falsey_tools_call_params_keep_serving(self):
+        home = tempfile.mkdtemp(prefix="notify-me-mcp-")
+        proc = _ndjson_session(home)
+        try:
+            _send_line(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "t", "version": "0"},
+                    },
+                },
+            )
+            _read_line(proc)
+            _send_line(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+            _send_line(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": [],
+                },
+            )
+            reply = _read_line(proc)
+            _assert_rpc_error(self, reply, (-32602,))
+            self.assertEqual(reply.get("id"), 2)
+            self.assertNotIn("result", reply)
+            self.assertTrue(_alive(proc), "falsey tools/call params killed the MCP process")
+            _assert_ping(self, proc, 3)
+        finally:
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream:
+                    stream.close()
+            proc.kill()
+            proc.wait(timeout=2)
+
+    def test_falsey_tools_call_arguments_keep_serving(self):
+        home = tempfile.mkdtemp(prefix="notify-me-mcp-")
+        proc = _ndjson_session(home)
+        try:
+            _send_line(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "t", "version": "0"},
+                    },
+                },
+            )
+            _read_line(proc)
+            _send_line(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+            _send_line(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "notify_me", "arguments": []},
+                },
+            )
+            reply = _read_line(proc)
+            _assert_rpc_error(self, reply, (-32602,))
+            self.assertEqual(reply.get("id"), 2)
+            self.assertNotIn("result", reply)
+            self.assertTrue(_alive(proc), "falsey tools/call arguments killed the MCP process")
+            _assert_ping(self, proc, 3)
+        finally:
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream:
+                    stream.close()
+            proc.kill()
+            proc.wait(timeout=2)
+
     def test_consecutive_blank_lines_do_not_recurse(self):
         home = tempfile.mkdtemp(prefix="notify-me-mcp-")
         proc = _ndjson_session(home)
