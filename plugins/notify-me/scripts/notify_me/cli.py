@@ -64,11 +64,17 @@ def _setup(options):
     tested = Deliverer().test({})
     if tested.get("status") != "accepted":
         if tested.get("category") in ("timeout", "network_error"):
+            if previous is not None:
+                _restore_previous_binding(binding, previous)
             return {
                 "ok": False,
                 "error": {
                     "code": "test_unconfirmed",
-                    "message": "测试通知超时或未能连接，绑定已保留",
+                    "message": (
+                        "测试通知超时或未能连接，新地址未确认，仍使用原来的绑定"
+                        if previous is not None
+                        else "测试通知超时或未能连接，绑定已保留"
+                    ),
                     "result": tested,
                 },
             }

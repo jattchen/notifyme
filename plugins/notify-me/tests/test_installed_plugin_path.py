@@ -1235,7 +1235,7 @@ class InstallBindingRollbackTests(unittest.TestCase):
         self.assertEqual(bound.host, "api.day.app")
         self.assertEqual(bound.key, "OldWorkingKey1")
 
-    def test_timeout_install_test_keeps_new_binding(self):
+    def test_timeout_install_test_keeps_old_working_binding(self):
         old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
         Binding().save(old)
         self.assertEqual(Binding().public_view()["host"], "api.day.app")
@@ -1266,8 +1266,8 @@ class InstallBindingRollbackTests(unittest.TestCase):
             "测试通知未被 Bark 接受",
         )
         bound = Binding().load()
-        self.assertEqual(bound.host, "bark.example.com")
-        self.assertEqual(bound.key, "NewSlowKey1234")
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "OldWorkingKey1")
 
     def test_timeout_install_test_keeps_first_binding(self):
         timed_out = {
@@ -1295,7 +1295,7 @@ class InstallBindingRollbackTests(unittest.TestCase):
         self.assertEqual(bound.host, "bark.example.com")
         self.assertEqual(bound.key, "FirstSlowKey12")
 
-    def test_connection_failure_install_test_keeps_new_binding(self):
+    def test_connection_failure_install_test_keeps_old_working_binding(self):
         old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
         Binding().save(old)
 
@@ -1325,5 +1325,5 @@ class InstallBindingRollbackTests(unittest.TestCase):
             "测试通知未被 Bark 接受",
         )
         bound = Binding().load()
-        self.assertEqual(bound.host, "bark.example.com")
-        self.assertEqual(bound.key, "NewDropKey1234")
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "OldWorkingKey1")
