@@ -368,15 +368,16 @@ class Deliverer:
                 os.unlink(tmp)
             except OSError:
                 pass
-            return
+            return False
         try:
             os.replace(tmp, self._accepted_path())
         except OSError:
-            return
+            return False
         try:
             chmod_private_file(self._accepted_path())
         except OSError:
-            return
+            pass
+        return True
 
     def dispatch(self, params, env=None):
         params = params or {}
@@ -433,17 +434,21 @@ class Deliverer:
             result = self.transport.send_with_retry(endpoint, payload)
             if result.accepted:
                 self._accepted.add(key)
+                persisted = False
                 try:
-                    self._record_accepted(key)
+                    persisted = bool(self._record_accepted(key))
                 except Exception:
-                    pass
-                return {
+                    persisted = False
+                accepted = {
                     "ok": True,
                     "status": "accepted",
                     "item_id": item_id,
                     "state": state,
                     "attempts": result.attempts,
                 }
+                if not persisted:
+                    accepted["persist"] = "degraded"
+                return accepted
             return {
                 "ok": False,
                 "status": "failed",

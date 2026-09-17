@@ -326,6 +326,23 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(second["status"], "deduplicated")
         self.assertEqual(self.transport.calls, 1)
 
+    def test_persist_failure_after_accept_is_visible_on_first_return(self):
+        with mock.patch(
+            "notify_me.deliver.os.replace", side_effect=OSError("replace failed")
+        ):
+            first = self.deliverer.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                }
+            )
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(first.get("persist"), "degraded")
+        self.assertEqual(self.transport.calls, 1)
+
     def test_corrupt_accepted_json_does_not_repost_across_deliverers(self):
         first = self.deliverer.send(
             {
