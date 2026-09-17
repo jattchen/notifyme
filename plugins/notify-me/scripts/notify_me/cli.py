@@ -58,7 +58,13 @@ def _setup(options):
 
 
 def _doctor(deliverer):
-    binding = deliverer.binding.public_view()
+    binding_store = deliverer.binding
+    try:
+        binding = binding_store.load().public_view()
+    except NotifyMeError as exc:
+        if exc.code == "insecure_binding":
+            raise
+        binding = binding_store.public_view()
     agents = grok_home() / "AGENTS.md"
     agents_text = agents.read_text(encoding="utf-8") if agents.is_file() else ""
     return {
