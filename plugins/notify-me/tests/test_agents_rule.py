@@ -117,6 +117,34 @@ class AgentsRuleTests(unittest.TestCase):
         self.assertNotIn("<!-- notify-me:managed:start version=grok-1 -->", text)
         self.assertNotIn("leftover chunk", text)
 
+    def test_commit_keeps_user_sections_between_dangling_start_and_later_block(self):
+        path = Path(self.tmpdir.name) / "AGENTS.md"
+        path.write_text(
+            "# 全局\n\n"
+            "<!-- notify-me:managed:start version=grok-1 -->\n"
+            "leftover chunk\n"
+            "## 我的其他规则\n"
+            "- 用户自己的规则\n"
+            "<!-- notify-me:managed:start version=6 -->\n"
+            "old complete\n"
+            "<!-- notify-me:managed:end -->\n",
+            encoding="utf-8",
+        )
+        result = commit()
+        self.assertEqual(result["status"], "committed")
+        self.assertEqual(result["action"], "replaced")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("## 我的其他规则", text)
+        self.assertIn("- 用户自己的规则", text)
+        self.assertIn("# 全局", text)
+        self.assertIn(managed_block(), text)
+        self.assertEqual(text.count("<!-- notify-me:managed:start"), 1)
+        self.assertEqual(text.count("<!-- notify-me:managed:end -->"), 1)
+        self.assertNotIn("<!-- notify-me:managed:start version=grok-1 -->", text)
+        self.assertNotIn("leftover chunk", text)
+        self.assertNotIn("old complete", text)
+        self.assertNotIn("version=6", text)
+
     def test_commit_follows_agents_symlink_instead_of_replacing_it(self):
         home = Path(self.tmpdir.name)
         target = home / "dotfiles" / "AGENTS.md"
