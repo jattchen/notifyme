@@ -91,6 +91,122 @@ class DeliverTests(unittest.TestCase):
         self.assertTrue(second["ok"])
         self.assertEqual(self.transport.calls, 1)
 
+    def test_same_triple_different_workspaces_both_accepted(self):
+        first_repo = Path(self.tmpdir.name) / "alpha-proj"
+        second_repo = Path(self.tmpdir.name) / "beta-proj"
+        (first_repo / ".git").mkdir(parents=True)
+        (second_repo / ".git").mkdir(parents=True)
+        first = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "alpha 在等回答",
+            },
+            {"GROK_WORKSPACE_ROOT": str(first_repo)},
+        )
+        second = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "beta 在等回答",
+            },
+            {"GROK_WORKSPACE_ROOT": str(second_repo)},
+        )
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(second["status"], "accepted")
+        self.assertEqual(self.transport.calls, 2)
+        self.assertEqual(
+            self.transport.payloads[0]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "alpha-proj"),
+        )
+        self.assertEqual(
+            self.transport.payloads[1]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "beta-proj"),
+        )
+        self.assertEqual(self.transport.payloads[0]["group"], "alpha-proj")
+        self.assertEqual(self.transport.payloads[1]["group"], "beta-proj")
+        self.assertEqual(self.transport.payloads[0]["body"], "alpha 在等回答")
+        self.assertEqual(self.transport.payloads[1]["body"], "beta 在等回答")
+        retry = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "alpha 再次等待",
+            },
+            {"GROK_WORKSPACE_ROOT": str(first_repo)},
+        )
+        self.assertEqual(retry["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 2)
+
+    def test_legacy_triple_does_not_suppress_named_project(self):
+        accepted_path = Path(self.tmpdir.name) / "accepted.json"
+        accepted_path.write_text(
+            json.dumps([["wait", "open", "answer"]]),
+            encoding="utf-8",
+        )
+        leftover = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "home 仍应去重",
+            }
+        )
+        self.assertEqual(leftover["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 0)
+        repo = Path(self.tmpdir.name) / "other-proj"
+        (repo / ".git").mkdir(parents=True)
+        named = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "other 应再推一次",
+            },
+            {"GROK_WORKSPACE_ROOT": str(repo)},
+        )
+        self.assertEqual(named["status"], "accepted")
+        self.assertEqual(self.transport.calls, 1)
+        self.assertEqual(
+            self.transport.payloads[0]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "other-proj"),
+        )
+        self.assertEqual(self.transport.payloads[0]["group"], "other-proj")
+
+    def test_same_basename_different_roots_both_accepted(self):
+        first_repo = Path(self.tmpdir.name) / "one" / "shared-name"
+        second_repo = Path(self.tmpdir.name) / "two" / "shared-name"
+        (first_repo / ".git").mkdir(parents=True)
+        (second_repo / ".git").mkdir(parents=True)
+        first = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "one 在等",
+            },
+            {"GROK_WORKSPACE_ROOT": str(first_repo)},
+        )
+        second = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "two 在等",
+            },
+            {"GROK_WORKSPACE_ROOT": str(second_repo)},
+        )
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(second["status"], "accepted")
+        self.assertEqual(self.transport.calls, 2)
+        self.assertEqual(self.transport.payloads[0]["group"], "shared-name")
+        self.assertEqual(self.transport.payloads[1]["group"], "shared-name")
+        self.assertEqual(self.transport.payloads[0]["body"], "one 在等")
+        self.assertEqual(self.transport.payloads[1]["body"], "two 在等")
+
     def test_send_accepted_then_deduplicated_across_deliverers(self):
         other = Deliverer(
             binding=Binding(Path(self.tmpdir.name)),
