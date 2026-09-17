@@ -142,6 +142,21 @@ def _required(params, name):
     return value.strip()
 
 
+def _dry_run(params):
+    value = (params or {}).get("dry_run")
+    if value is None or value is False or value == 0:
+        return False
+    if value is True:
+        return True
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("false", "0"):
+            return False
+        if normalized == "true":
+            return True
+    raise NotifyMeError("invalid_arguments", "dry_run 必须是布尔值")
+
+
 def _resolved_path(start):
     if not start:
         return None
@@ -338,7 +353,7 @@ class Deliverer:
         item_id = _required(params, "item_id")
         state = _required(params, "state")
         message = _required(params, "message")
-        dry_run = bool((params or {}).get("dry_run"))
+        dry_run = _dry_run(params)
         key = (item_id, state, condition)
         with _AcceptedSendLock(self.binding.home):
             accepted_keys, accepted_corrupt = self._load_accepted()
@@ -396,7 +411,7 @@ class Deliverer:
             }
 
     def test(self, params, env=None):
-        dry_run = bool((params or {}).get("dry_run"))
+        dry_run = _dry_run(params)
         message = (params or {}).get("message")
         if message is None or (isinstance(message, str) and not message.strip()):
             message = "这是 Grok Notify Me 的测试通知"

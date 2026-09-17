@@ -370,6 +370,58 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(result["title"], TEST_TITLE)
         self.assertEqual(self.transport.calls, 0)
 
+    def test_string_false_dry_run_posts_for_send_and_test(self):
+        sent = self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+                "dry_run": "false",
+            }
+        )
+        self.assertNotEqual(sent["status"], "dry_run")
+        self.assertEqual(sent["status"], "accepted")
+        self.assertTrue(sent["ok"])
+        self.assertEqual(self.transport.calls, 1)
+        tested = self.deliverer.test({"dry_run": "false", "message": "测试"})
+        self.assertNotEqual(tested["status"], "dry_run")
+        self.assertEqual(tested["status"], "accepted")
+        self.assertTrue(tested["ok"])
+        self.assertEqual(self.transport.calls, 2)
+
+    def test_dry_run_falsey_values_post_and_unknown_is_rejected(self):
+        send_params = {
+            "condition": "answer",
+            "item_id": "wait-token",
+            "state": "missing",
+            "message": "请提供 API token",
+        }
+        for index, value in enumerate(("0", 0, False, None)):
+            params = dict(send_params)
+            params["item_id"] = "wait-token-{}".format(index)
+            params["dry_run"] = value
+            result = self.deliverer.send(params)
+            self.assertNotEqual(result["status"], "dry_run", value)
+            self.assertEqual(result["status"], "accepted", value)
+        missing = self.deliverer.send(dict(send_params, item_id="wait-token-missing"))
+        self.assertEqual(missing["status"], "accepted")
+        self.assertEqual(self.transport.calls, 5)
+        for value in ("true", "TRUE", True):
+            result = self.deliverer.send(dict(send_params, item_id="dry-{}".format(value), dry_run=value))
+            self.assertEqual(result["status"], "dry_run", value)
+            self.assertEqual(self.transport.calls, 5)
+        string_true_test = self.deliverer.test({"dry_run": "true"})
+        self.assertEqual(string_true_test["status"], "dry_run")
+        self.assertEqual(self.transport.calls, 5)
+        with self.assertRaises(NotifyMeError) as caught:
+            self.deliverer.send(dict(send_params, dry_run="yes"))
+        self.assertEqual(caught.exception.code, "invalid_arguments")
+        with self.assertRaises(NotifyMeError) as caught:
+            self.deliverer.test({"dry_run": "yes"})
+        self.assertEqual(caught.exception.code, "invalid_arguments")
+        self.assertEqual(self.transport.calls, 5)
+
     def test_unknown_op_and_condition(self):
         with self.assertRaises(NotifyMeError) as caught:
             self.deliverer.dispatch({"op": "status"})
