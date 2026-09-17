@@ -29,6 +29,8 @@ class Binding:
         if not isinstance(endpoint, BarkEndpoint):
             raise NotifyMeError("invalid_bark_url", "Bark 地址未完成校验")
         _refuse_insecure_binding_path(self.path)
+        if self.home.exists() and stat.S_IMODE(self.home.stat().st_mode) & 0o077:
+            raise NotifyMeError("insecure_binding", "Bark 状态目录权限过宽")
         ensure_private_dir(self.home)
         payload = json.dumps(endpoint.to_stored(), ensure_ascii=False)
         fd, tmp = tempfile.mkstemp(dir=str(self.home), prefix=".binding.")

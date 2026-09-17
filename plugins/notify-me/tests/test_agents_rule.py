@@ -458,6 +458,47 @@ class CliTests(unittest.TestCase):
         self.assertEqual(bound.key, "OldWorkingKey1")
         self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
 
+    def test_setup_wide_state_dir_is_not_clean_first_bind(self):
+        import stat
+        from io import StringIO
+        from unittest import mock
+
+        home = Path(self.tmpdir.name)
+        Binding(home).save(BarkEndpoint.parse("https://api.day.app/OldWorkingKey1"))
+        before = (home / "binding.json").read_text(encoding="utf-8")
+        home.chmod(0o777)
+        transport = _CountTransport()
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://api.day.app/Abcdefgh1234",
+        ), mock.patch(
+            "notify_me.cli.Deliverer",
+            side_effect=lambda *args, **kwargs: Deliverer(
+                binding=kwargs.get("binding") or Binding(home),
+                transport=transport,
+            ),
+        ), mock.patch("sys.stdout", buf):
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")) and payload.get("status") == "bound",
+            "setup must not look like a clean first bind after a previously-wide state dir",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload.get("ok"))
+        self.assertEqual(payload.get("error", {}).get("code"), "insecure_binding")
+        self.assertNotEqual(payload.get("status"), "bound")
+        self.assertNotEqual(payload.get("test"), "accepted")
+        self.assertEqual(transport.calls, 0)
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("OldWorkingKey1", buf.getvalue())
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+        self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o777)
+        self.assertEqual((home / "binding.json").read_text(encoding="utf-8"), before)
+        self.assertFalse((home / "AGENTS.md").exists())
+
     def test_agents_rule_plan_json(self):
         from io import StringIO
         from unittest import mock
