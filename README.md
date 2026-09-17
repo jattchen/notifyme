@@ -49,3 +49,11 @@ curl -fsSL https://raw.githubusercontent.com/jattchen/notifyme/main/install.sh |
 ```
 
 诊断：`python3 ~/.grok/notify-me doctor`
+
+## Codex 适配版
+
+Codex 使用独立的 `notify-me-codex` 插件身份，不覆盖或复用 Grok 的 `notify-me`。插件包含标准 Agent Plugins `plugin.json`/`mcp.json`，并保留 `.codex-plugin/` 兼容清单；正常通知通过本地 stdio MCP 工具 `notifyme` 发送。
+
+安装后首次配置由插件 Skill 引导，在真实终端中运行插件根目录的 `scripts/notify_me.py setup`。该命令会隐藏读取 Bark URL、发送测试通知，并把 Notify Me Codex 托管规则写入 `~/.codex/AGENTS.md`。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
+
+正常通知必须由当前顶层主 Agent 直接调用 `mcp__notifyme_codex__notifyme`，并带上 `op`、`condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。

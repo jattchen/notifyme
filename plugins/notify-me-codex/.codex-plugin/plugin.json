@@ -1,0 +1,34 @@
+{
+  "name": "notify-me-codex",
+  "version": "0.1.0",
+  "description": "按托管规则为 Codex 任务发送私密 Bark 通知。",
+  "author": {
+    "name": "Notify Me Contributors"
+  },
+  "homepage": "https://github.com/jattchen/notifyme",
+  "repository": "https://github.com/jattchen/notifyme",
+  "license": "MIT",
+  "keywords": [
+    "bark",
+    "notification",
+    "codex",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Notify Me Codex",
+    "shortDescription": "为 Codex 任务发送 Bark 通知",
+    "longDescription": "由当前顶层主 Agent 在需要用户介入、出现严重风险或整件任务完成时发送私密 Bark 通知。",
+    "developerName": "Notify Me Contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Notifications"
+    ],
+    "websiteURL": "https://github.com/jattchen/notifyme",
+    "defaultPrompt": [
+      "检查 Notify Me Codex 的本地配置",
+      "发送一条 Notify Me Codex 测试通知"
+    ]
+  }
+}

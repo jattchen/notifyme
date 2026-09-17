@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "notifyme_codex": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "-u",
+        "${PLUGIN_ROOT}/scripts/mcp_server.py"
+      ],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
