@@ -20,7 +20,12 @@ MANAGED_BODY = (
 )
 MANAGED_BLOCK_RE = re.compile(
     r"<!-- notify-me:managed:start version=.*?-->"
-    r"(?:.*?<!-- notify-me:managed:end -->|.*?(?=\n#{1,6} |\Z))",
+    r"(?:"
+    r"(?:(?!\n#{1,6} )(?!\n<!-- notify-me:managed:start).)*?"
+    r"<!-- notify-me:managed:end -->"
+    r"|"
+    r".*?(?=\n#{1,6} |\n<!-- notify-me:managed:start|\Z)"
+    r")",
     re.DOTALL,
 )
 _COMPLETE_CURRENT_BLOCK_RE = re.compile(
@@ -40,7 +45,13 @@ def agents_path():
 def _apply(text):
     block = managed_block()
     if MANAGED_BLOCK_RE.search(text or ""):
-        return MANAGED_BLOCK_RE.sub(lambda _: block, text), "replaced"
+        seen = {"n": 0}
+
+        def _replace(_match):
+            seen["n"] += 1
+            return block if seen["n"] == 1 else ""
+
+        return MANAGED_BLOCK_RE.sub(_replace, text), "replaced"
     body = text or ""
     if body and not body.endswith("\n"):
         body += "\n"
