@@ -19,7 +19,7 @@ MANAGED_BODY = (
 )
 MANAGED_BLOCK_RE = re.compile(
     r"<!-- notify-me:managed:start version=.*?-->"
-    r"(?:.*?<!-- notify-me:managed:end -->|.*\Z)",
+    r"(?:.*?<!-- notify-me:managed:end -->|.*?(?=\n#{1,6} |\Z))",
     re.DOTALL,
 )
 _COMPLETE_CURRENT_BLOCK_RE = re.compile(

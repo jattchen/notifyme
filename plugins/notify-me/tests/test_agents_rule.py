@@ -95,6 +95,28 @@ class AgentsRuleTests(unittest.TestCase):
         self.assertNotIn("leftover chunk", text)
         self.assertNotIn("version=grok-1", text)
 
+    def test_commit_keeps_user_sections_after_dangling_start(self):
+        path = Path(self.tmpdir.name) / "AGENTS.md"
+        path.write_text(
+            "# 全局\n\n"
+            "<!-- notify-me:managed:start version=grok-1 -->\n"
+            "leftover chunk\n"
+            "## 我的其他规则\n"
+            "- 用户自己的规则\n",
+            encoding="utf-8",
+        )
+        result = commit()
+        self.assertEqual(result["status"], "committed")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("## 我的其他规则", text)
+        self.assertIn("- 用户自己的规则", text)
+        self.assertIn("# 全局", text)
+        self.assertIn(managed_block(), text)
+        self.assertEqual(text.count("<!-- notify-me:managed:start"), 1)
+        self.assertEqual(text.count("<!-- notify-me:managed:end -->"), 1)
+        self.assertNotIn("<!-- notify-me:managed:start version=grok-1 -->", text)
+        self.assertNotIn("leftover chunk", text)
+
     def test_commit_writes_backslash_body_literally(self):
         from unittest import mock
 
