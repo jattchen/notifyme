@@ -297,6 +297,7 @@ TOOL_SCHEMA = {
                 "description": (
                     "Absolute project root for this send. Relative values "
                     "such as '.', a project name, or '../foo' are rejected. "
+                    "The path must name an existing directory. "
                     "Use it when the MCP process has no CODEX_WORKSPACE_ROOT "
                     "or CODEX_PROJECT_DIR, so two projects with the same "
                     "item stay distinct."
@@ -566,10 +567,19 @@ class Deliverer:
         workspace = (params or {}).get("workspace")
         if not isinstance(workspace, str) or not workspace.strip():
             raise NotifyMeError("invalid_arguments", "send 必须包含 workspace")
-        if not Path(workspace.strip()).expanduser().is_absolute():
+        workspace_path = Path(workspace.strip()).expanduser()
+        if not workspace_path.is_absolute():
             raise NotifyMeError("invalid_arguments", "workspace 必须是绝对路径")
+        try:
+            workspace_path = workspace_path.resolve()
+        except OSError as exc:
+            raise NotifyMeError("invalid_arguments", "workspace 无法解析") from exc
+        if not workspace_path.is_dir():
+            raise NotifyMeError("invalid_arguments", "workspace 必须是现存目录")
         dry_run = _dry_run(params)
-        env = _env_with_call_workspace(params, env)
+        normalized_params = dict(params)
+        normalized_params["workspace"] = str(workspace_path)
+        env = _env_with_call_workspace(normalized_params, env)
         key = (workspace_identity(env), item_id, state, condition)
         project = project_name(env)
         title = _compose_title(condition, project)
