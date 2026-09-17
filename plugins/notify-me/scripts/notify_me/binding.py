@@ -18,6 +18,8 @@ def _refuse_insecure_binding_path(path):
         return
     if not stat.S_ISREG(info.st_mode):
         raise NotifyMeError("insecure_binding", "binding.json 不是普通文件")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise NotifyMeError("insecure_binding", "Bark 绑定文件权限过宽")
 
 
 class Binding:
