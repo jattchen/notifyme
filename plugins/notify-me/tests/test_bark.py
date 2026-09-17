@@ -118,6 +118,38 @@ class BarkTests(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertEqual(opener.calls, 1)
 
+    def _assert_2xx_unreadable_body_does_not_retry(self, first_body):
+        endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        opener = SequenceOpener(
+            [
+                FakeResponse(200, first_body),
+                FakeResponse(200, b'{"code":200}'),
+            ]
+        )
+        transport = BarkTransport(opener=opener)
+        result = transport.send_with_retry(
+            endpoint,
+            {
+                "device_key": endpoint.key,
+                "title": "任务阻塞",
+                "body": "请查看",
+            },
+            sleep=lambda _delay: None,
+        )
+        self.assertFalse(result.accepted)
+        self.assertFalse(result.retryable)
+        self.assertEqual(result.attempts, 1)
+        self.assertEqual(opener.calls, 1)
+
+    def test_http_2xx_empty_body_does_not_retry(self):
+        self._assert_2xx_unreadable_body_does_not_retry(b"")
+
+    def test_http_2xx_non_json_body_does_not_retry(self):
+        self._assert_2xx_unreadable_body_does_not_retry(b"not-json")
+
+    def test_http_2xx_oversized_body_does_not_retry(self):
+        self._assert_2xx_unreadable_body_does_not_retry(b"x" * 65537)
+
 
 class BindingTests(unittest.TestCase):
     def setUp(self):
