@@ -148,12 +148,18 @@ def _mcp_row_mentions(text, name, needle):
 def _check_mcp_current(plugin_dir=None):
     dest = plugin_dir if plugin_dir is not None else installed_plugin_root()
     if dest is None:
-        return
+        raise NotifyMeError(
+            "plugin_missing",
+            "未找到当前插件，无法核验 MCP",
+        )
     server = Path(dest) / "scripts" / "mcp_server.py"
     try:
         listed = _run(["grok", "mcp", "list"], check=False)
     except OSError:
-        return
+        raise NotifyMeError(
+            "mcp_unreadable",
+            "无法读取 MCP 列表",
+        )
     text = (listed.stdout or "") + (listed.stderr or "")
     home = grok_home()
     for name in ("notify_me", "notifyme"):
