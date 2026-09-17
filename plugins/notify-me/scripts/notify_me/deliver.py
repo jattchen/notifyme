@@ -321,14 +321,21 @@ class Deliverer:
                 )
             return keys
         for item in data:
-            if not isinstance(item, list) or not all(
-                isinstance(part, str) for part in item
+            if (
+                isinstance(item, list)
+                and all(isinstance(part, str) for part in item)
+                and len(item) in (3, 4)
             ):
+                if len(item) == 4:
+                    keys.add((item[0], item[1], item[2], item[3]))
+                else:
+                    keys.add(("", item[0], item[1], item[2]))
                 continue
-            if len(item) == 4:
-                keys.add((item[0], item[1], item[2], item[3]))
-            elif len(item) == 3:
-                keys.add(("", item[0], item[1], item[2]))
+            if fail_closed:
+                raise NotifyMeError(
+                    "invalid_accepted",
+                    "accepted.json 无法作为记录列表读取",
+                )
         return keys
 
     def _load_accepted(self):
