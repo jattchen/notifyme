@@ -708,6 +708,52 @@ class EnsureMcpUpgradeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self._assert_mcp_rewritten_to_current_plugin()
 
+    def test_ensure_mcp_rewrites_notifyme_listing_missing_name_flag(self):
+        server = self.new_plugin / "scripts" / "mcp_server.py"
+        listed = (
+            "  notify_me: python3 -u {0}\n"
+            "  notifyme: python3 -u {0}\n"
+        ).format(server)
+        original_path = os.environ.get("PATH")
+        os.environ["PATH"] = self.env["PATH"]
+        os.environ["GROK_MCP_LIST"] = listed
+        os.environ["GROK_MCP_ADD_LOG"] = self.env["GROK_MCP_ADD_LOG"]
+        try:
+            _ensure_mcp(self.new_plugin)
+        finally:
+            if original_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = original_path
+            os.environ.pop("GROK_MCP_LIST", None)
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        logged = self._added_commands()
+        self.assertIn("mcp add notifyme", logged)
+        self.assertIn("--name notifyme", logged)
+        self.assertIn(str(server), logged)
+        self.assertNotIn("mcp add notify_me", logged)
+
+    def test_ensure_mcp_keeps_notifyme_listing_with_name_flag(self):
+        server = self.new_plugin / "scripts" / "mcp_server.py"
+        listed = (
+            "  notify_me: python3 -u {0}\n"
+            "  notifyme: python3 -u {0} --name notifyme\n"
+        ).format(server)
+        original_path = os.environ.get("PATH")
+        os.environ["PATH"] = self.env["PATH"]
+        os.environ["GROK_MCP_LIST"] = listed
+        os.environ["GROK_MCP_ADD_LOG"] = self.env["GROK_MCP_ADD_LOG"]
+        try:
+            _ensure_mcp(self.new_plugin)
+        finally:
+            if original_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = original_path
+            os.environ.pop("GROK_MCP_LIST", None)
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        self.assertEqual(self._added_commands(), "")
+
 
 def _write_grok_log_stub(bindir):
     grok = bindir / "grok"

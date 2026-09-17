@@ -116,9 +116,12 @@ def _ensure_plugin():
 def _mcp_points_at(text, name, server):
     prefix = name + ":"
     needle = str(server)
+    require_alias_name = name == "notifyme"
     for line in (text or "").splitlines():
         stripped = line.strip()
         if stripped.startswith(prefix) and needle in stripped:
+            if require_alias_name and "--name notifyme" not in stripped:
+                continue
             return True
     return False
 
