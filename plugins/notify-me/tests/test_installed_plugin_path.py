@@ -798,6 +798,57 @@ class EnsurePluginSelfInstallTests(unittest.TestCase):
         self.assertNotIn("plugin install {}".format(current), logged)
         self.assertNotIn("jattchen/notifyme#plugins/notify-me", logged)
 
+    def test_ensure_plugin_source_install_failure_does_not_use_leftover(self):
+        leftover = _make_real_plugin(self.installed, "notify-me-oldhash", mtime=1_000)
+        (leftover / "plugin.json").write_text("{}\n", encoding="utf-8")
+        source = self.root / "src" / "plugins" / "notify-me"
+        shutil.copytree(ROOT, source)
+        grok = self.bindir / "grok"
+        grok.write_text(
+            """#!/bin/sh
+printf '%s\\n' "$*" >> "$GROK_STUB_LOG"
+if [ "$1" = plugin ] && [ "$2" = install ]; then
+  printf '%s\\n' "refused local source install" >&2
+  exit 1
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        grok.chmod(0o755)
+        self.assertFalse(
+            str(source.resolve()).startswith(str(self.installed.resolve())),
+        )
+        self.assertEqual(source.parent.name, "plugins")
+        original = {
+            "PATH": os.environ.get("PATH"),
+            "GROK_HOME": os.environ.get("GROK_HOME"),
+            "GROK_STUB_LOG": os.environ.get("GROK_STUB_LOG"),
+            "GROK_NOTIFY_ME_HOME": os.environ.get("GROK_NOTIFY_ME_HOME"),
+        }
+        os.environ["PATH"] = self.env["PATH"]
+        os.environ["GROK_HOME"] = self.env["GROK_HOME"]
+        os.environ["GROK_STUB_LOG"] = self.env["GROK_STUB_LOG"]
+        os.environ["GROK_NOTIFY_ME_HOME"] = self.env["GROK_NOTIFY_ME_HOME"]
+        try:
+            with mock.patch(
+                "notify_me.install.plugin_root",
+                return_value=source,
+            ):
+                with self.assertRaises(NotifyMeError) as ctx:
+                    dest = _ensure_plugin()
+                    self.fail("used leftover {}".format(dest))
+        finally:
+            for key, value in original.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.assertEqual(ctx.exception.code, "plugin_install_failed")
+        self.assertIn("plugin install {}".format(source), self._logged())
+        self.assertTrue(leftover.is_dir())
+        self.assertEqual(installed_plugin_root(self.grok_home), leftover)
+
 
 class GhFallbackTempCleanupTests(unittest.TestCase):
     def setUp(self):
@@ -837,12 +888,18 @@ class GhFallbackTempCleanupTests(unittest.TestCase):
             created.append(path)
             return path
 
+        source = self.root / "no-plugin-json"
+        source.mkdir()
         with mock.patch(
-            "notify_me.install.tempfile.mkdtemp",
-            side_effect=tracking_mkdtemp,
+            "notify_me.install.plugin_root",
+            return_value=source,
         ):
-            with self.assertRaises(NotifyMeError):
-                _ensure_plugin()
+            with mock.patch(
+                "notify_me.install.tempfile.mkdtemp",
+                side_effect=tracking_mkdtemp,
+            ):
+                with self.assertRaises(NotifyMeError):
+                    _ensure_plugin()
         self.assertTrue(created, "gh-clone fallback should create a temp dir")
         self.assertFalse(
             Path(created[0]).exists(),
