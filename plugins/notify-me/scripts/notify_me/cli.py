@@ -65,6 +65,7 @@ def _doctor(deliverer):
         if exc.code in ("insecure_binding", "invalid_binding"):
             raise
         binding = binding_store.public_view()
+    deliverer._read_accepted_keys(deliverer._accepted_path(), fail_closed=True)
     agents = grok_home() / "AGENTS.md"
     agents_text = agents.read_text(encoding="utf-8") if agents.is_file() else ""
     return {
