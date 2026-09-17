@@ -15,8 +15,10 @@ SCRIPTS = ROOT / "scripts"
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SCRIPTS))
 
+from notify_me.bark import BarkEndpoint  # noqa: E402
+from notify_me.binding import Binding  # noqa: E402
 from notify_me.errors import NotifyMeError  # noqa: E402
-from notify_me.install import _ensure_mcp, _ensure_plugin  # noqa: E402
+from notify_me.install import _ensure_mcp, _ensure_plugin, run_install  # noqa: E402
 from notify_me.paths import installed_plugin_root  # noqa: E402
 from notify_me import paths as notify_me_paths  # noqa: E402
 
@@ -905,3 +907,53 @@ class GhFallbackTempCleanupTests(unittest.TestCase):
             Path(created[0]).exists(),
             "fallback temp clone should be deleted after failure",
         )
+
+
+class InstallBindingRollbackTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmpdir.name)
+        self._old_env = {
+            "GROK_NOTIFY_ME_HOME": os.environ.get("GROK_NOTIFY_ME_HOME"),
+            "GROK_HOME": os.environ.get("GROK_HOME"),
+        }
+        os.environ["GROK_NOTIFY_ME_HOME"] = str(self.home)
+        os.environ["GROK_HOME"] = str(self.home / "grok")
+
+    def tearDown(self):
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.tmpdir.cleanup()
+
+    def test_rejected_install_test_keeps_existing_binding(self):
+        old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
+        Binding().save(old)
+        self.assertEqual(Binding().public_view()["host"], "api.day.app")
+
+        rejected = {
+            "ok": False,
+            "status": "failed",
+            "category": "http",
+            "http_status": 400,
+            "attempts": 1,
+        }
+        with mock.patch("notify_me.install._require_tty"), mock.patch(
+            "notify_me.install._ensure_plugin",
+            return_value=self.home,
+        ), mock.patch("notify_me.install._ensure_mcp"), mock.patch(
+            "notify_me.install.getpass.getpass",
+            return_value="https://bark.example.com/NewTypoKey123",
+        ), mock.patch(
+            "notify_me.install.Deliverer"
+        ) as deliverer_cls:
+            deliverer_cls.return_value.test.return_value = rejected
+            result = run_install()
+
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error", {}).get("code"), "test_not_accepted")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "OldWorkingKey1")
