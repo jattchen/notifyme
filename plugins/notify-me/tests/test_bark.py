@@ -57,6 +57,13 @@ class BarkTests(unittest.TestCase):
         self.assertNotIn("key", view)
         self.assertNotIn("Abcdefgh1234", json.dumps(view))
 
+    def test_parse_keeps_path_prefix_and_uses_last_segment_as_key(self):
+        endpoint = BarkEndpoint.parse("https://push.example/notifications/Abcdefgh1234")
+        self.assertEqual(endpoint.key, "Abcdefgh1234")
+        self.assertEqual(endpoint.server, "https://push.example/notifications")
+        self.assertEqual(endpoint.push_url, "https://push.example/notifications/push")
+        self.assertEqual(endpoint.host, "push.example")
+
     def test_parse_idna_encodes_unicode_host_for_ascii_push_url(self):
         endpoint = BarkEndpoint.parse("https://例子.com/Abcdefgh1234")
         self.assertEqual(endpoint.host, "xn--fsqu00a.com")

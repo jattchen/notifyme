@@ -85,7 +85,7 @@ class BarkEndpoint:
         segments = [segment for segment in raw_path.split("/") if segment]
         if not segments:
             raise NotifyMeError("invalid_bark_url", "Bark 地址缺少设备密钥")
-        key = segments[0]
+        key = segments[-1]
         if len(key) < 8 or not _KEY_RE.fullmatch(key):
             raise NotifyMeError("invalid_bark_key", "Bark 设备密钥格式无效")
         if key.lower() in _PLACEHOLDERS or set(key.lower()) == {"x"}:
@@ -102,6 +102,8 @@ class BarkEndpoint:
         else:
             normalized_netloc = normalized_host
         server = "{}://{}".format(parsed.scheme.lower(), normalized_netloc)
+        if len(segments) > 1:
+            server = "{}/{}".format(server, "/".join(segments[:-1]))
         return cls(server=server, key=key, host=host)
 
     @classmethod
