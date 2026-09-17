@@ -7,7 +7,7 @@ import tempfile
 from .paths import agents_path
 
 
-MANAGED_VERSION = "1"
+MANAGED_VERSION = "2"
 MANAGED_START = "<!-- notify-me-codex:managed:start version={} -->".format(
     MANAGED_VERSION
 )
@@ -15,7 +15,11 @@ MANAGED_END = "<!-- notify-me-codex:managed:end -->"
 MANAGED_BODY = (
     "仅当前顶层主 Agent 直接调用 MCP 工具 "
     "mcp__notifyme_codex__notifyme（不是 Skill）；"
-    "调用 send 时必须带上当前项目根路径 workspace；"
+    "调用时必须传入扁平参数 condition、item_id、state、message、workspace；"
+    "workspace 必须是当前项目根路径的绝对路径；"
+    "调用格式固定为 {\"condition\":\"...\",\"item_id\":\"...\","
+    "\"state\":\"...\",\"message\":\"...\","
+    "\"workspace\":\"<绝对项目根路径>\"}，不得传 op；"
     "等待用户且主线停住 → condition=answer；"
     "等待用户授权 → condition=auth；"
     "等待用户在对话外操作 → condition=action；"

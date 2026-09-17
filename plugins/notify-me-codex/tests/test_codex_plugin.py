@@ -13,7 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from notify_me.agents_rule import MANAGED_START, MANAGED_END, has_managed_block  # noqa: E402
 from notify_me.binding import Binding  # noqa: E402
-from notify_me.deliver import Deliverer  # noqa: E402
+from notify_me.deliver import Deliverer, TOOL_SCHEMA  # noqa: E402
 
 
 class CodexPackageTests(unittest.TestCase):
@@ -23,7 +23,9 @@ class CodexPackageTests(unittest.TestCase):
             (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text()
         )
         self.assertEqual(portable["name"], "notify-me-codex")
+        self.assertEqual(portable["version"], "0.1.1")
         self.assertEqual(compatibility["name"], portable["name"])
+        self.assertEqual(compatibility["version"], portable["version"])
         self.assertEqual(compatibility["mcpServers"], "./.mcp.json")
 
         mcp = json.loads((PLUGIN_ROOT / "mcp.json").read_text())
@@ -31,6 +33,21 @@ class CodexPackageTests(unittest.TestCase):
         self.assertEqual(server["type"], "stdio")
         self.assertEqual(server["args"][-1], "${PLUGIN_ROOT}/scripts/mcp_server.py")
         self.assertEqual(server["cwd"], "${PLUGIN_ROOT}")
+
+    def test_codex_schema_is_flat_and_explicit(self):
+        schema = TOOL_SCHEMA["inputSchema"]
+        self.assertEqual(
+            set(schema["properties"]),
+            {"condition", "item_id", "state", "message", "dry_run", "workspace"},
+        )
+        self.assertNotIn("op", schema["properties"])
+        self.assertEqual(
+            schema["required"],
+            ["condition", "item_id", "state", "message", "workspace"],
+        )
+        for combinator in ("allOf", "anyOf", "oneOf", "if", "then"):
+            self.assertNotIn(combinator, schema)
+        self.assertIs(schema["additionalProperties"], False)
 
     def test_skill_requires_explicit_invocation(self):
         policy = (
@@ -58,6 +75,9 @@ class CodexPackageTests(unittest.TestCase):
                 self.assertEqual(text.count(MANAGED_START), 1)
                 self.assertEqual(text.count(MANAGED_END), 1)
                 self.assertIn("mcp__notifyme_codex__notifyme", text)
+                for field in ("condition", "item_id", "state", "message", "workspace"):
+                    self.assertIn(field, agents_rule.managed_block())
+                self.assertIn("不得传 op", agents_rule.managed_block())
         finally:
             agents_rule.agents_path = original
 
@@ -68,7 +88,6 @@ class CodexPackageTests(unittest.TestCase):
             workspace.mkdir()
             result = Deliverer(binding=Binding(state)).dispatch(
                 {
-                    "op": "send",
                     "condition": "answer",
                     "item_id": "question-1",
                     "state": "waiting",
@@ -88,7 +107,6 @@ class CodexPackageTests(unittest.TestCase):
             with self.assertRaises(NotifyMeError) as raised:
                 Deliverer(binding=Binding(Path(raw) / "state")).dispatch(
                     {
-                        "op": "send",
                         "condition": "answer",
                         "item_id": "question-1",
                         "state": "waiting",
@@ -105,12 +123,31 @@ class CodexPackageTests(unittest.TestCase):
             with self.assertRaises(NotifyMeError) as raised:
                 Deliverer(binding=Binding(Path(raw) / "state")).dispatch(
                     {
-                        "op": "send",
                         "condition": "answer",
                         "item_id": "question-1",
                         "state": "waiting",
                         "message": "请提供必要信息",
                         "workspace": str(Path(raw) / "missing-workspace"),
+                        "dry_run": True,
+                    }
+                )
+            self.assertEqual(raised.exception.code, "invalid_arguments")
+
+    def test_legacy_op_shape_is_rejected(self):
+        from notify_me.errors import NotifyMeError
+
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw) / "workspace"
+            workspace.mkdir()
+            with self.assertRaises(NotifyMeError) as raised:
+                Deliverer(binding=Binding(Path(raw) / "state")).dispatch(
+                    {
+                        "op": "send",
+                        "condition": "answer",
+                        "item_id": "question-1",
+                        "state": "waiting",
+                        "message": "请提供必要信息",
+                        "workspace": str(workspace),
                         "dry_run": True,
                     }
                 )
@@ -151,9 +188,41 @@ class CodexPackageTests(unittest.TestCase):
                 proc.stdin.flush()
                 listed = json.loads(proc.stdout.readline())
                 self.assertIn("instructions", init["result"])
+                instructions = init["result"]["instructions"]
+                for field in ("condition", "item_id", "state", "message", "workspace"):
+                    self.assertIn(field, instructions)
                 self.assertEqual(
                     [tool["name"] for tool in listed["result"]["tools"]], ["notifyme"]
                 )
+                listed_schema = listed["result"]["tools"][0]["inputSchema"]
+                self.assertEqual(listed_schema["required"], TOOL_SCHEMA["inputSchema"]["required"])
+                self.assertNotIn("allOf", listed_schema)
+                proc.stdin.write(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "notifyme",
+                                "arguments": {
+                                    "condition": "answer",
+                                    "item_id": "question-1",
+                                    "state": "waiting",
+                                    "message": "请提供必要信息",
+                                    "workspace": raw,
+                                    "dry_run": True,
+                                },
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+                proc.stdin.flush()
+                called = json.loads(proc.stdout.readline())
+                payload = json.loads(called["result"]["content"][0]["text"])
+                self.assertEqual(payload["status"], "dry_run")
+                self.assertEqual(payload["item_id"], "question-1")
             finally:
                 proc.stdin.close()
                 proc.stdout.close()

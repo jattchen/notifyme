@@ -130,9 +130,12 @@ def serve(deliverer=None, tool_name=None):
                         "serverInfo": {"name": tool_name, "version": "1.0.0"},
                         "instructions": (
                             "Notify Me 只由当前顶层主 Agent 使用。"
-                            "send 仅用于等待用户、授权、外部操作、严重不可逆风险或整件任务完成；"
-                            "普通进度和中间步骤不发送。send 必须传入当前项目绝对路径 workspace，"
-                            "并以 accepted 才能报告服务已接受。不要传入 Bark URL。"
+                            "工具参数是扁平对象，必须包含 condition、item_id、state、message、workspace；"
+                            "condition 只能是 answer、auth、action、severe-risk 或 done。"
+                            "不要传入 op 或 Bark URL。"
+                            "仅在等待用户、授权、外部操作、严重不可逆风险或整件任务完成时发送；"
+                            "普通进度和中间步骤不发送。workspace 必须是当前项目绝对路径，"
+                            "并以 accepted 才能报告服务已接受。"
                         ),
                     },
                 }

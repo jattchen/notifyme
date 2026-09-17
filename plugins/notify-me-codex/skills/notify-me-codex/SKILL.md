@@ -31,9 +31,8 @@ python3 <notify-me-codex-plugin-root>/scripts/notify_me.py test
 
 ## 正常通知
 
-正常通知直接调用 `mcp__notifyme_codex__notifyme`，不要先加载本 Skill，也不要调用 CLI。请求必须包含：
+正常通知直接调用 `mcp__notifyme_codex__notifyme`，不要先加载本 Skill，也不要调用 CLI。请求必须包含以下扁平字段：
 
-- `op`: `send`
 - `condition`: `answer`、`auth`、`action`、`severe-risk` 或 `done`
 - `item_id`: 当前事件的稳定标识
 - `state`: 当前语义状态的稳定标识

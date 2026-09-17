@@ -189,11 +189,13 @@ class _InFlightReservation:
 TOOL_NAME = "notifyme"
 TOOL_NAMES = (TOOL_NAME,)
 TOOL_DESCRIPTION = (
-    "Codex top-level agent: send answer|auth|action|severe-risk|done; test verifies Bark. "
+    "Codex top-level agent: send one answer|auth|action|severe-risk|done notification. "
     "Never pass Bark URLs."
 )
-OPS = ("send", "test")
 SENDABLE = ("answer", "auth", "action", "severe-risk", "done")
+SEND_KEYS = frozenset(
+    {"condition", "item_id", "state", "message", "workspace", "dry_run"}
+)
 WAITING_EFFECT = {"level": "timeSensitive", "sound": "telegraph"}
 QUIET_EFFECT = {"level": "active", "sound": "glass"}
 TITLE_MARKS = {
@@ -258,16 +260,11 @@ TOOL_SCHEMA = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "op": {
-                "type": "string",
-                "enum": list(OPS),
-                "description": "send delivers a notification; test verifies Bark binding.",
-            },
             "condition": {
                 "type": "string",
                 "enum": list(SENDABLE),
                 "description": (
-                    "Required for send. answer: need a reply or choice. "
+                    "answer: need a reply or choice. "
                     "auth: need permission or token. "
                     "action: user must act outside chat. "
                     "severe-risk: continuing is irreversible. "
@@ -304,21 +301,7 @@ TOOL_SCHEMA = {
                 ),
             },
         },
-        "required": ["op"],
-        "allOf": [
-            {
-                "if": {"properties": {"op": {"const": "send"}}},
-                "then": {
-                    "required": [
-                        "condition",
-                        "item_id",
-                        "state",
-                        "message",
-                        "workspace",
-                    ]
-                },
-            }
-        ],
+        "required": ["condition", "item_id", "state", "message", "workspace"],
         "additionalProperties": False,
     },
 }
@@ -546,15 +529,19 @@ class Deliverer:
         return True
 
     def dispatch(self, params, env=None):
-        params = params or {}
-        op = params.get("op")
-        if op == "send":
-            return self.send(params, env)
-        if op == "test":
-            return self.test(params, env)
-        raise NotifyMeError("unsupported_command", "不支持的 op")
+        return self.send(params, env)
 
     def send(self, params, env=None):
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            raise NotifyMeError("invalid_arguments", "notifyme 参数必须是对象")
+        unknown = sorted(set(params) - SEND_KEYS)
+        if unknown:
+            raise NotifyMeError(
+                "invalid_arguments",
+                "notifyme 不接受参数：{}".format("、".join(unknown)),
+            )
         condition = (params or {}).get("condition")
         if condition not in SENDABLE:
             raise NotifyMeError(

@@ -1,6 +1,6 @@
 {
   "name": "notify-me-codex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "按托管规则为 Codex 任务发送私密 Bark 通知。",
   "author": {
     "name": "Notify Me Contributors"
