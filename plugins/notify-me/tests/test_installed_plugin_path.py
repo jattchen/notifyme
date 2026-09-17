@@ -1052,3 +1052,96 @@ class InstallBindingRollbackTests(unittest.TestCase):
         bound = Binding().load()
         self.assertEqual(bound.host, "api.day.app")
         self.assertEqual(bound.key, "OldWorkingKey1")
+
+    def test_timeout_install_test_keeps_new_binding(self):
+        old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
+        Binding().save(old)
+        self.assertEqual(Binding().public_view()["host"], "api.day.app")
+
+        timed_out = {
+            "ok": False,
+            "status": "failed",
+            "category": "timeout",
+            "http_status": None,
+            "attempts": 1,
+        }
+        with mock.patch("notify_me.install._require_tty"), mock.patch(
+            "notify_me.install._ensure_plugin",
+            return_value=self.home,
+        ), mock.patch("notify_me.install._ensure_mcp"), mock.patch(
+            "notify_me.install.getpass.getpass",
+            return_value="https://bark.example.com/NewSlowKey1234",
+        ), mock.patch(
+            "notify_me.install.Deliverer"
+        ) as deliverer_cls:
+            deliverer_cls.return_value.test.return_value = timed_out
+            result = run_install()
+
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error", {}).get("code"), "test_unconfirmed")
+        self.assertNotEqual(
+            result.get("error", {}).get("message"),
+            "测试通知未被 Bark 接受",
+        )
+        bound = Binding().load()
+        self.assertEqual(bound.host, "bark.example.com")
+        self.assertEqual(bound.key, "NewSlowKey1234")
+
+    def test_timeout_install_test_keeps_first_binding(self):
+        timed_out = {
+            "ok": False,
+            "status": "failed",
+            "category": "timeout",
+            "http_status": None,
+            "attempts": 1,
+        }
+        with mock.patch("notify_me.install._require_tty"), mock.patch(
+            "notify_me.install._ensure_plugin",
+            return_value=self.home,
+        ), mock.patch("notify_me.install._ensure_mcp"), mock.patch(
+            "notify_me.install.getpass.getpass",
+            return_value="https://bark.example.com/FirstSlowKey12",
+        ), mock.patch(
+            "notify_me.install.Deliverer"
+        ) as deliverer_cls:
+            deliverer_cls.return_value.test.return_value = timed_out
+            result = run_install()
+
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error", {}).get("code"), "test_unconfirmed")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "bark.example.com")
+        self.assertEqual(bound.key, "FirstSlowKey12")
+
+    def test_connection_failure_install_test_keeps_new_binding(self):
+        old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
+        Binding().save(old)
+
+        unreachable = {
+            "ok": False,
+            "status": "failed",
+            "category": "network_error",
+            "http_status": None,
+            "attempts": 2,
+        }
+        with mock.patch("notify_me.install._require_tty"), mock.patch(
+            "notify_me.install._ensure_plugin",
+            return_value=self.home,
+        ), mock.patch("notify_me.install._ensure_mcp"), mock.patch(
+            "notify_me.install.getpass.getpass",
+            return_value="https://bark.example.com/NewDropKey1234",
+        ), mock.patch(
+            "notify_me.install.Deliverer"
+        ) as deliverer_cls:
+            deliverer_cls.return_value.test.return_value = unreachable
+            result = run_install()
+
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error", {}).get("code"), "test_unconfirmed")
+        self.assertNotEqual(
+            result.get("error", {}).get("message"),
+            "测试通知未被 Bark 接受",
+        )
+        bound = Binding().load()
+        self.assertEqual(bound.host, "bark.example.com")
+        self.assertEqual(bound.key, "NewDropKey1234")
