@@ -254,6 +254,25 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertFalse(payload["agents_managed"])
 
+    def test_doctor_corrupt_binding_is_not_unbound_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        path = Path(self.tmpdir.name) / "binding.json"
+        path.write_text("{not-valid-json", encoding="utf-8")
+        path.chmod(0o600)
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")) and payload.get("bound") is False,
+            "doctor must not treat a corrupt binding as unbound-and-ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("error", {}).get("code"), "invalid_binding")
+
     def test_doctor_insecure_binding_is_not_unbound_ok(self):
         from io import StringIO
         from unittest import mock
