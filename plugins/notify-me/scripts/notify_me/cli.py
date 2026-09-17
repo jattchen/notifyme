@@ -8,7 +8,12 @@ from .bark import BarkEndpoint
 from .binding import Binding
 from .deliver import Deliverer
 from .errors import NotifyMeError
-from .install import _load_previous_binding, _restore_previous_binding, run_install
+from .install import (
+    _check_mcp_current,
+    _load_previous_binding,
+    _restore_previous_binding,
+    run_install,
+)
 from .paths import grok_home, write_stable_entry
 
 
@@ -95,6 +100,7 @@ def _doctor(deliverer):
             raise
         binding = binding_store.public_view()
     deliverer._read_accepted_keys(deliverer._accepted_path(), fail_closed=True)
+    _check_mcp_current()
     agents = grok_home() / "AGENTS.md"
     agents_text = agents.read_text(encoding="utf-8") if agents.is_file() else ""
     return {
