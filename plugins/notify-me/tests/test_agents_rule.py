@@ -887,6 +887,94 @@ exit 0
         self.assertNotIn("state_home", buf.getvalue())
         self.assertNotIn("Abcdefgh1234", buf.getvalue())
 
+    def test_doctor_mcp_list_nonzero_is_not_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        home = Path(self.tmpdir.name)
+        Binding(home).save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
+        (home / "AGENTS.md").write_text(managed_block() + "\n", encoding="utf-8")
+        current = home / "installed-plugins" / "notify-me-current"
+        scripts = current / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "notify_me.py").write_text("# notify-me\n", encoding="utf-8")
+        (scripts / "mcp_server.py").write_text("# mcp\n", encoding="utf-8")
+        package = scripts / "notify_me"
+        package.mkdir()
+        (package / "paths.py").write_text("# paths\n", encoding="utf-8")
+        bindir = home / "bin"
+        bindir.mkdir()
+        grok = bindir / "grok"
+        grok.write_text(
+            """#!/bin/sh
+if [ "$1" = mcp ] && [ "$2" = list ]; then
+  printf '%s\\n' "mcp list failed"
+  exit 1
+fi
+if [ "$1" = mcp ]; then
+  printf '%s\\n' "$*" >> "$GROK_MCP_ADD_LOG"
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        grok.chmod(0o755)
+        mutate_log = home / "mcp-mutate.log"
+        buf = StringIO()
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = "{}:{}".format(bindir, old_path or "")
+        os.environ["GROK_MCP_ADD_LOG"] = str(mutate_log)
+        try:
+            with mock.patch("sys.stdout", buf):
+                code = main(["doctor"])
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")),
+            "doctor must not treat a failed MCP list as ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertEqual(payload.get("error", {}).get("code"), "mcp_unreadable")
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+        self.assertFalse(mutate_log.exists())
+
+    def test_doctor_mcp_names_missing_is_not_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        home = Path(self.tmpdir.name)
+        Binding(home).save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
+        (home / "AGENTS.md").write_text(managed_block() + "\n", encoding="utf-8")
+        listed = "  other_server: python3 -u /tmp/other.py\n"
+        mutate_log = home / "mcp-mutate.log"
+        old_path = self._install_current_plugin_grok(listed=listed)
+        buf = StringIO()
+        os.environ["GROK_MCP_ADD_LOG"] = str(mutate_log)
+        try:
+            with mock.patch("sys.stdout", buf):
+                code = main(["doctor"])
+        finally:
+            self._restore_grok_path(old_path)
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")),
+            "doctor must not treat a current plugin with neither MCP name as ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertEqual(payload.get("error", {}).get("code"), "mcp_missing")
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+        self.assertFalse(mutate_log.exists())
+
     def test_doctor_symlink_binding_is_not_unbound_ok(self):
         from io import StringIO
         from unittest import mock
