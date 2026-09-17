@@ -34,6 +34,21 @@ def _make_plugin(installed, name, mtime=None):
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text("# notify-me\n", encoding="utf-8")
     (root / "scripts" / "mcp_server.py").write_text("# mcp\n", encoding="utf-8")
+    package = root / "scripts" / "notify_me"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "paths.py").write_text("# paths\n", encoding="utf-8")
+    if mtime is not None:
+        os.utime(root, (mtime, mtime))
+        os.utime(script.parent, (mtime, mtime))
+        os.utime(script, (mtime, mtime))
+    return root.resolve()
+
+
+def _make_stub_plugin(installed, name, mtime=None):
+    root = installed / name
+    script = root / "scripts" / "notify_me.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("# notify-me stub\n", encoding="utf-8")
     if mtime is not None:
         os.utime(root, (mtime, mtime))
         os.utime(script.parent, (mtime, mtime))
@@ -169,12 +184,32 @@ class InstalledPluginRootTests(unittest.TestCase):
         self.assertEqual(installed_plugin_root(self.home), newer)
         self.assertNotEqual(installed_plugin_root(self.home), older)
 
+    def test_older_complete_wins_over_newer_stub_without_registry(self):
+        complete = _make_plugin(self.installed, "notify-me-complete", mtime=1_000)
+        stub = _make_stub_plugin(self.installed, "notify-me-stub", mtime=2_000)
+        found = installed_plugin_root(self.home)
+        self.assertEqual(found, complete)
+        self.assertNotEqual(found, stub)
+
+    def test_only_stubs_are_not_usable(self):
+        _make_stub_plugin(self.installed, "notify-me-stub-one", mtime=1_000)
+        _make_stub_plugin(self.installed, "notify-me-stub-two", mtime=2_000)
+        self.assertIsNone(installed_plugin_root(self.home))
+
     def test_corrupt_registry_falls_back_to_newest(self):
         older = _make_plugin(self.installed, "notify-me-aaaaaaa", mtime=1_000)
         newer = _make_plugin(self.installed, "notify-me-bbbbbbb", mtime=2_000)
         (self.installed / "registry.json").write_text("{not json", encoding="utf-8")
         self.assertEqual(installed_plugin_root(self.home), newer)
         self.assertNotEqual(installed_plugin_root(self.home), older)
+
+    def test_older_complete_wins_over_newer_stub_when_registry_corrupt(self):
+        complete = _make_plugin(self.installed, "notify-me-complete", mtime=1_000)
+        stub = _make_stub_plugin(self.installed, "notify-me-stub", mtime=2_000)
+        (self.installed / "registry.json").write_text("{not json", encoding="utf-8")
+        found = installed_plugin_root(self.home)
+        self.assertEqual(found, complete)
+        self.assertNotEqual(found, stub)
 
     def test_stale_registry_path_falls_back_to_usable_dir(self):
         missing = self.installed / "notify-me-missing"
@@ -443,6 +478,19 @@ class InstallShResolverTests(unittest.TestCase):
         result = _run_install_sh_resolver(self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Path(result.stdout.strip()).resolve(), newer)
+
+    def test_install_sh_resolver_prefers_complete_over_newer_stub(self):
+        complete = _make_real_plugin(self.installed, "notify-me-complete", mtime=1_000)
+        _make_stub_plugin(self.installed, "notify-me-stub", mtime=2_000)
+        result = _run_install_sh_resolver(self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(result.stdout.strip()).resolve(), complete)
+
+    def test_install_sh_resolver_only_stubs_exits_nonzero(self):
+        _make_stub_plugin(self.installed, "notify-me-stub", mtime=2_000)
+        result = _run_install_sh_resolver(self.home)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "")
 
     def test_install_sh_resolver_missing_exits_nonzero(self):
         result = _run_install_sh_resolver(self.home)

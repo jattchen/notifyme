@@ -5,6 +5,8 @@ from pathlib import Path
 
 PLUGIN_DIR_PREFIX = "notify-me-"
 PLUGIN_SCRIPT = Path("scripts") / "notify_me.py"
+PLUGIN_MCP_SERVER = Path("scripts") / "mcp_server.py"
+PLUGIN_PATHS_MODULE = Path("scripts") / "notify_me" / "paths.py"
 STABLE_ENTRY_NAME = "notify-me"
 
 _STABLE_ENTRY_SOURCE = """\
@@ -66,6 +68,8 @@ def _usable_plugin_dir(path):
             path.is_dir()
             and path.name.startswith(PLUGIN_DIR_PREFIX)
             and (path / PLUGIN_SCRIPT).is_file()
+            and (path / PLUGIN_MCP_SERVER).is_file()
+            and (path / PLUGIN_PATHS_MODULE).is_file()
         )
     except OSError:
         return False
