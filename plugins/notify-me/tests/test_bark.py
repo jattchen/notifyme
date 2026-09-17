@@ -181,3 +181,14 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(loaded_local.server, "http://127.0.0.1")
         self.assertEqual(loaded_local.host, "127.0.0.1")
         self.assertEqual(binding.public_view()["host"], "127.0.0.1")
+
+    def test_load_rejects_world_writable_state_dir(self):
+        binding = Binding(self.home)
+        endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        binding.save(endpoint)
+        self.home.chmod(0o777)
+        self.assertEqual(stat.S_IMODE(binding.path.stat().st_mode), 0o600)
+        with self.assertRaises(NotifyMeError) as caught:
+            binding.load()
+        self.assertEqual(caught.exception.code, "insecure_binding")
+        self.assertEqual(stat.S_IMODE(self.home.stat().st_mode), 0o777)
