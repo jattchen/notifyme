@@ -9,7 +9,7 @@ from .binding import Binding
 from .deliver import Deliverer
 from .errors import NotifyMeError
 from .install import _load_previous_binding, _restore_previous_binding, run_install
-from .paths import grok_home, state_home, write_stable_entry
+from .paths import grok_home, write_stable_entry
 
 
 def _emit(payload, exit_code):
@@ -101,7 +101,6 @@ def _doctor(deliverer):
         "ok": True,
         "status": "ok",
         "host_detected": grok_home().is_dir(),
-        "state_home": str(state_home()),
         "bound": bool(binding.get("bound")),
         "host": binding.get("host"),
         "agents_md": str(agents),

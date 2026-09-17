@@ -1079,3 +1079,47 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(result["status"], "accepted")
         self.assertTrue(result["ok"])
         self.assertEqual(self.transport.calls, 1)
+
+    def test_send_rejects_binding_symlink(self):
+        planted = Path(self.tmpdir.name) / "planted-binding.json"
+        planted.write_text(self.binding.path.read_text(encoding="utf-8"), encoding="utf-8")
+        planted.chmod(0o600)
+        self.binding.path.unlink()
+        self.binding.path.symlink_to(planted)
+        with self.assertRaises(NotifyMeError) as caught:
+            self.deliverer.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                }
+            )
+        self.assertEqual(caught.exception.code, "insecure_binding")
+        self.assertEqual(self.transport.calls, 0)
+        self.assertTrue(self.binding.path.is_symlink())
+
+    def test_save_rejects_binding_symlink(self):
+        planted = Path(self.tmpdir.name) / "planted-binding.json"
+        planted.write_text("{}", encoding="utf-8")
+        planted.chmod(0o600)
+        self.binding.path.unlink()
+        self.binding.path.symlink_to(planted)
+        with self.assertRaises(NotifyMeError) as caught:
+            self.binding.save(self.endpoint)
+        self.assertEqual(caught.exception.code, "insecure_binding")
+        self.assertTrue(self.binding.path.is_symlink())
+        self.assertEqual(planted.read_text(encoding="utf-8"), "{}")
+        self.assertNotIn(self.endpoint.key, planted.read_text(encoding="utf-8"))
+
+    def test_load_and_save_reject_nonregular_binding(self):
+        self.binding.path.unlink()
+        self.binding.path.mkdir()
+        os.chmod(self.binding.path, 0o700)
+        with self.assertRaises(NotifyMeError) as caught:
+            self.binding.load()
+        self.assertEqual(caught.exception.code, "insecure_binding")
+        with self.assertRaises(NotifyMeError) as caught:
+            self.binding.save(self.endpoint)
+        self.assertEqual(caught.exception.code, "insecure_binding")
+        self.assertTrue(self.binding.path.is_dir())

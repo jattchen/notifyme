@@ -509,6 +509,46 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload.get("error", {}).get("code"), "invalid_accepted")
 
+    def test_doctor_does_not_leak_state_home(self):
+        from io import StringIO
+        from unittest import mock
+
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+
+    def test_doctor_symlink_binding_is_not_unbound_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        Binding(Path(self.tmpdir.name)).save(
+            BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
+        )
+        path = Path(self.tmpdir.name) / "binding.json"
+        planted = Path(self.tmpdir.name) / "planted-binding.json"
+        planted.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        planted.chmod(0o600)
+        path.unlink()
+        path.symlink_to(planted)
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")) and payload.get("bound") is not False,
+            "doctor must not treat a symlink binding as bound-and-ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("error", {}).get("code"), "insecure_binding")
+        self.assertNotIn("Abcdefgh1234", buf.getvalue())
+        self.assertTrue(path.is_symlink())
+
     def _bound_deliverer(self):
         binding = Binding(Path(self.tmpdir.name))
         binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
