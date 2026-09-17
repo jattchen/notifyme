@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import stat
@@ -178,16 +179,49 @@ def _mtime_plugin_dirs(installed_root):
     return matches
 
 
+def _plugin_dir_exports_current_api(path):
+    paths_file = Path(path) / PLUGIN_PATHS_MODULE
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_notify_me_paths_api_probe",
+            paths_file,
+        )
+    except (OSError, ValueError):
+        return False
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return False
+    return hasattr(module, "installed_plugin_root")
+
+
+def _first_importable_plugin_dir(hits):
+    for _, raw in reversed(hits):
+        path = Path(raw)
+        if _plugin_dir_exports_current_api(path):
+            return path
+    return None
+
+
 def _resolve_installed_plugin_root(grok_dir=None):
     home = Path(grok_dir).expanduser() if grok_dir is not None else grok_home()
     installed = home / "installed-plugins"
     registry_hits = _registry_plugin_dirs(installed)
     if registry_hits:
         registry_hits.sort()
+        chosen = _first_importable_plugin_dir(registry_hits)
+        if chosen is not None:
+            return chosen
         return Path(registry_hits[-1][1])
     mtime_hits = _mtime_plugin_dirs(installed)
     if mtime_hits:
         mtime_hits.sort()
+        chosen = _first_importable_plugin_dir(mtime_hits)
+        if chosen is not None:
+            return chosen
         return Path(mtime_hits[-1][1])
     return None
 

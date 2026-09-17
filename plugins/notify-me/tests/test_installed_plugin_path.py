@@ -363,6 +363,46 @@ class InstalledPluginRootTests(unittest.TestCase):
         self.assertEqual(found, plugin)
         self.assertNotIn("b47b0296", str(found))
 
+    def test_inprocess_resolve_falls_back_when_newest_complete_import_fails(self):
+        older = _make_real_plugin(self.installed, "notify-me-usable", mtime=1_000)
+        newest = _make_old_api_plugin(self.installed, "notify-me-broken", mtime=2_000)
+        newest_paths = newest / "scripts" / "notify_me" / "paths.py"
+        self.assertTrue((newest / "scripts" / "notify_me.py").is_file())
+        self.assertTrue((newest / "scripts" / "mcp_server.py").is_file())
+        self.assertTrue(newest_paths.is_file())
+        self.assertNotIn(
+            "installed_plugin_root",
+            newest_paths.read_text(encoding="utf-8"),
+        )
+        self.assertGreater(newest.stat().st_mtime_ns, older.stat().st_mtime_ns)
+
+        found = installed_plugin_root(self.home)
+        self.assertEqual(found, older)
+        self.assertNotEqual(found, newest)
+
+    def test_inprocess_resolve_falls_back_when_newest_registry_import_fails(self):
+        older = _make_real_plugin(self.installed, "notify-me-usable", mtime=1_000)
+        newest = _make_old_api_plugin(self.installed, "notify-me-broken", mtime=2_000)
+        _write_registry(
+            self.installed,
+            {
+                older.name: {
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "path": str(older),
+                    "plugins": {"notify-me": {"version": "1.0.0"}},
+                },
+                newest.name: {
+                    "updated_at": "2026-03-01T00:00:00+00:00",
+                    "path": str(newest),
+                    "plugins": {"notify-me": {"version": "1.0.0"}},
+                },
+            },
+        )
+
+        found = installed_plugin_root(self.home)
+        self.assertEqual(found, older)
+        self.assertNotEqual(found, newest)
+
 
 class WriteStableEntryTests(unittest.TestCase):
     def setUp(self):
@@ -1102,6 +1142,63 @@ class EnsurePluginSelfInstallTests(unittest.TestCase):
         self.assertNotIn("plugin install {}".format(leftover), logged)
         self.assertNotIn("plugin install {}".format(current), logged)
         self.assertNotIn("jattchen/notifyme#plugins/notify-me", logged)
+
+    def test_ensure_plugin_skips_newest_when_import_fails(self):
+        older = _make_real_plugin(self.installed, "notify-me-usable", mtime=1_000)
+        newest = _make_old_api_plugin(self.installed, "notify-me-broken", mtime=2_000)
+        (older / "plugin.json").write_text("{}\n", encoding="utf-8")
+        (newest / "plugin.json").write_text("{}\n", encoding="utf-8")
+        add_log = self.root / "mcp-add.log"
+        grok = self.bindir / "grok"
+        grok.write_text(
+            """#!/bin/sh
+printf '%s\\n' "$*" >> "$GROK_STUB_LOG"
+if [ "$1" = mcp ] && [ "$2" = list ]; then
+  printf '%s\\n' "$GROK_MCP_LIST"
+  exit 0
+fi
+if [ "$1" = mcp ] && { [ "$2" = add ] || [ "$2" = remove ]; }; then
+  printf '%s\\n' "$*" >> "$GROK_MCP_ADD_LOG"
+  exit 0
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        grok.chmod(0o755)
+        env = self.env.copy()
+        env["GROK_MCP_LIST"] = ""
+        env["GROK_MCP_ADD_LOG"] = str(add_log)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys;"
+                    "sys.path.insert(0, sys.argv[1]);"
+                    "from notify_me.install import _ensure_mcp, _ensure_plugin;"
+                    "dest = _ensure_plugin();"
+                    "_ensure_mcp(dest);"
+                    "print(dest)"
+                ),
+                str(older / "scripts"),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        chosen = Path(result.stdout.strip()).resolve()
+        self.assertEqual(chosen, older)
+        self.assertNotEqual(chosen, newest)
+        self.assertNotIn("jattchen/notifyme#plugins/notify-me", self._logged())
+        logged = add_log.read_text(encoding="utf-8") if add_log.is_file() else ""
+        older_server = str(older / "scripts" / "mcp_server.py")
+        newest_server = str(newest / "scripts" / "mcp_server.py")
+        self.assertIn("mcp add notify_me", logged)
+        self.assertIn("mcp add notifyme", logged)
+        self.assertIn(older_server, logged)
+        self.assertNotIn(newest_server, logged)
 
     def test_ensure_plugin_source_install_failure_does_not_use_leftover(self):
         leftover = _make_real_plugin(self.installed, "notify-me-oldhash", mtime=1_000)
