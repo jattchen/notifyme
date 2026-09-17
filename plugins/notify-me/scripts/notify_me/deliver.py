@@ -296,9 +296,11 @@ TOOL_SCHEMA = {
             "workspace": {
                 "type": "string",
                 "description": (
-                    "Absolute project root for this send. Use it when the MCP "
-                    "process has no GROK_WORKSPACE_ROOT or CLAUDE_PROJECT_DIR, "
-                    "so two projects with the same item stay distinct."
+                    "Absolute project root for this send. Relative values "
+                    "such as '.', a project name, or '../foo' are rejected. "
+                    "Use it when the MCP process has no GROK_WORKSPACE_ROOT "
+                    "or CLAUDE_PROJECT_DIR, so two projects with the same "
+                    "item stay distinct."
                 ),
             },
         },
@@ -334,7 +336,10 @@ def _resolved_path(start):
     if not start:
         return None
     try:
-        return Path(start).expanduser().resolve()
+        path = Path(start).expanduser()
+        if not path.is_absolute():
+            return None
+        return path.resolve()
     except OSError:
         return None
 
@@ -365,6 +370,8 @@ def _env_with_call_workspace(params, env):
     stripped = value.strip()
     if not stripped:
         return env
+    if not Path(stripped).expanduser().is_absolute():
+        raise NotifyMeError("invalid_arguments", "workspace 必须是绝对路径")
     merged = dict(os.environ if env is None else env)
     merged["GROK_WORKSPACE_ROOT"] = stripped
     return merged
