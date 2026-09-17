@@ -126,26 +126,26 @@ def _mcp_points_at(text, name, server):
     return False
 
 
+def _mcp_name_listed(text, name):
+    prefix = name + ":"
+    for line in (text or "").splitlines():
+        if line.strip().startswith(prefix):
+            return True
+    return False
+
+
 def _ensure_mcp(plugin_dir):
     listed = _run(["grok", "mcp", "list"], check=False)
     text = (listed.stdout or "") + (listed.stderr or "")
     server = plugin_dir / "scripts" / "mcp_server.py"
-    if not _mcp_points_at(text, "notify_me", server):
-        _run(["grok", "mcp", "add", "notify_me", "--", "python3", "-u", str(server)])
-    if not _mcp_points_at(text, "notifyme", server):
-        _run(
-            [
-                "grok",
-                "mcp",
-                "add",
-                "notifyme",
-                "--",
-                "python3",
-                "-u",
-                str(server),
-                "--name", "notifyme",
-            ]
-        )
+    for name, extra in (("notify_me", ()), ("notifyme", ("--name", "notifyme"))):
+        if _mcp_points_at(text, name, server):
+            continue
+        if _mcp_name_listed(text, name):
+            _run(["grok", "mcp", "remove", name], check=False)
+        argv = ["grok", "mcp", "add", name, "--", "python3", "-u", str(server)]
+        argv.extend(extra)
+        _run(argv)
 
 
 def _load_previous_binding(binding):
