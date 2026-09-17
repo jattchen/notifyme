@@ -145,6 +145,23 @@ def _ensure_mcp(plugin_dir):
         )
 
 
+def _load_previous_binding(binding):
+    try:
+        return binding.load()
+    except NotifyMeError:
+        return None
+
+
+def _restore_previous_binding(binding, previous):
+    if previous is not None:
+        binding.save(previous)
+        return
+    try:
+        binding.path.unlink()
+    except OSError:
+        pass
+
+
 def run_install():
     _require_tty()
     _say("正在安装 Notify Me…")
@@ -153,10 +170,13 @@ def run_install():
     _say("请粘贴 Bark 推送 URL（输入不可见，不会出现在 Grok 对话里）。")
     raw = getpass.getpass("Bark URL: ")
     endpoint = BarkEndpoint.parse(raw)
-    view = Binding().save(endpoint)
+    binding = Binding()
+    previous = _load_previous_binding(binding)
+    view = binding.save(endpoint)
     _say("已绑定 {}。正在发送测试通知…".format(view["host"]))
     tested = Deliverer().test({})
     if tested.get("status") != "accepted":
+        _restore_previous_binding(binding, previous)
         return {
             "ok": False,
             "error": {
