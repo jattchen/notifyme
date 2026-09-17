@@ -51,7 +51,10 @@ class DeliverTests(unittest.TestCase):
 
     def test_schema_is_minimal(self):
         props = TOOL_SCHEMA["inputSchema"]["properties"]
-        self.assertEqual(set(props), {"op", "condition", "item_id", "state", "message", "dry_run"})
+        self.assertEqual(
+            set(props),
+            {"op", "condition", "item_id", "state", "message", "dry_run", "workspace"},
+        )
         self.assertEqual(TOOL_SCHEMA["inputSchema"]["properties"]["op"]["enum"], ["send", "test"])
         self.assertEqual(
             TOOL_SCHEMA["inputSchema"]["properties"]["condition"]["enum"],
@@ -138,6 +141,65 @@ class DeliverTests(unittest.TestCase):
                 "message": "alpha 再次等待",
             },
             {"GROK_WORKSPACE_ROOT": str(first_repo)},
+        )
+        self.assertEqual(retry["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 2)
+
+    def test_mcp_dispatch_same_triple_different_workspaces_both_accepted(self):
+        first_repo = Path(self.tmpdir.name) / "alpha-proj"
+        second_repo = Path(self.tmpdir.name) / "beta-proj"
+        (first_repo / ".git").mkdir(parents=True)
+        (second_repo / ".git").mkdir(parents=True)
+        mcp_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("GROK_WORKSPACE_ROOT", "CLAUDE_PROJECT_DIR")
+        }
+        first = self.deliverer.dispatch(
+            {
+                "op": "send",
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "alpha 在等回答",
+                "workspace": str(first_repo),
+            },
+            mcp_env,
+        )
+        second = self.deliverer.dispatch(
+            {
+                "op": "send",
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "beta 在等回答",
+                "workspace": str(second_repo),
+            },
+            mcp_env,
+        )
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(second["status"], "accepted")
+        self.assertEqual(self.transport.calls, 2)
+        self.assertEqual(
+            self.transport.payloads[0]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "alpha-proj"),
+        )
+        self.assertEqual(
+            self.transport.payloads[1]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "beta-proj"),
+        )
+        self.assertEqual(self.transport.payloads[0]["group"], "alpha-proj")
+        self.assertEqual(self.transport.payloads[1]["group"], "beta-proj")
+        retry = self.deliverer.dispatch(
+            {
+                "op": "send",
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "alpha 再次等待",
+                "workspace": str(first_repo),
+            },
+            mcp_env,
         )
         self.assertEqual(retry["status"], "deduplicated")
         self.assertEqual(self.transport.calls, 2)
