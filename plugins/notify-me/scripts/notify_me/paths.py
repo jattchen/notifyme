@@ -12,6 +12,7 @@ STABLE_ENTRY_NAME = "notify-me"
 
 _STABLE_ENTRY_SOURCE = """\
 #!/usr/bin/env python3
+import json
 import os
 import sys
 from pathlib import Path
@@ -24,32 +25,64 @@ def _resolver():
     else:
         grok = Path.home() / ".grok"
     installed = grok / "installed-plugins"
-    try:
-        candidates = list(installed.glob("notify-me-*"))
-    except OSError:
-        candidates = []
-    for path in candidates:
-        scripts = path / "scripts"
-        if not (
-            (scripts / "notify_me.py").is_file()
-            and (scripts / "mcp_server.py").is_file()
-            and (scripts / "notify_me" / "paths.py").is_file()
-        ):
-            continue
-        if str(scripts) not in sys.path:
-            sys.path.insert(0, str(scripts))
+
+    def usable(path):
         try:
-            from notify_me.paths import installed_plugin_root
-        except ImportError:
-            sys.modules.pop("notify_me.paths", None)
-            sys.modules.pop("notify_me", None)
+            return (
+                path.is_dir()
+                and path.name.startswith("notify-me-")
+                and (path / "scripts" / "notify_me.py").is_file()
+                and (path / "scripts" / "mcp_server.py").is_file()
+                and (path / "scripts" / "notify_me" / "paths.py").is_file()
+            )
+        except OSError:
+            return False
+
+    matches = []
+    registry = installed / "registry.json"
+    try:
+        data = json.loads(registry.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        data = None
+    repos = data.get("repos") if isinstance(data, dict) else None
+    if isinstance(repos, dict):
+        for key, repo in repos.items():
+            if not isinstance(repo, dict):
+                continue
+            plugins = repo.get("plugins") or {}
+            if not isinstance(plugins, dict) or "notify-me" not in plugins:
+                continue
+            raw = repo.get("path") or str(installed / key)
+            path = Path(raw).expanduser()
+            if not usable(path):
+                continue
+            stamp = str(repo.get("updated_at") or repo.get("installed_at") or "")
+            matches.append((stamp, path.resolve()))
+    if not matches:
+        try:
+            candidates = list(installed.glob("notify-me-*"))
+        except OSError:
+            candidates = []
+        for path in candidates:
+            if not usable(path):
+                continue
             try:
-                sys.path.remove(str(scripts))
-            except ValueError:
-                pass
-            continue
-        return installed_plugin_root
-    return None
+                stamp = path.stat().st_mtime_ns
+            except OSError:
+                continue
+            matches.append((stamp, path.resolve()))
+    if not matches:
+        return None
+    matches.sort()
+    chosen = matches[-1][1]
+    scripts = chosen / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        from notify_me.paths import installed_plugin_root
+    except ImportError:
+        return None
+    return installed_plugin_root
 
 
 resolve = _resolver()
