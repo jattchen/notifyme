@@ -145,6 +145,22 @@ def _mcp_row_mentions(text, name, needle):
     return False
 
 
+def _mcp_list_text():
+    try:
+        listed = _run(["grok", "mcp", "list"], check=False)
+    except OSError:
+        raise NotifyMeError(
+            "mcp_unreadable",
+            "无法读取 MCP 列表",
+        )
+    if listed.returncode != 0:
+        raise NotifyMeError(
+            "mcp_unreadable",
+            "无法读取 MCP 列表",
+        )
+    return (listed.stdout or "") + (listed.stderr or "")
+
+
 def _check_mcp_current(plugin_dir=None):
     dest = plugin_dir if plugin_dir is not None else installed_plugin_root()
     if dest is None:
@@ -153,18 +169,13 @@ def _check_mcp_current(plugin_dir=None):
             "未找到当前插件，无法核验 MCP",
         )
     server = Path(dest) / "scripts" / "mcp_server.py"
-    try:
-        listed = _run(["grok", "mcp", "list"], check=False)
-    except OSError:
-        raise NotifyMeError(
-            "mcp_unreadable",
-            "无法读取 MCP 列表",
-        )
-    text = (listed.stdout or "") + (listed.stderr or "")
+    text = _mcp_list_text()
     home = grok_home()
+    found = False
     for name in ("notify_me", "notifyme"):
         if not _mcp_name_listed(text, name):
             continue
+        found = True
         if _mcp_points_at(text, name, server):
             continue
         if not _mcp_row_mentions(text, name, home):
@@ -173,11 +184,15 @@ def _check_mcp_current(plugin_dir=None):
             "mcp_stale",
             "MCP 仍指向旧插件，未指向当前 mcp_server.py",
         )
+    if not found:
+        raise NotifyMeError(
+            "mcp_missing",
+            "当前插件未登记 MCP",
+        )
 
 
 def _ensure_mcp(plugin_dir):
-    listed = _run(["grok", "mcp", "list"], check=False)
-    text = (listed.stdout or "") + (listed.stderr or "")
+    text = _mcp_list_text()
     server = plugin_dir / "scripts" / "mcp_server.py"
     for name, extra in (("notify_me", ()), ("notifyme", ("--name", "notifyme"))):
         if _mcp_points_at(text, name, server):
