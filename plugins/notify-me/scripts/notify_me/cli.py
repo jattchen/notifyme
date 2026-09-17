@@ -8,7 +8,7 @@ from .bark import BarkEndpoint
 from .binding import Binding
 from .deliver import Deliverer
 from .errors import NotifyMeError
-from .install import run_install
+from .install import _load_previous_binding, _restore_previous_binding, run_install
 from .paths import grok_home, state_home, write_stable_entry
 
 
@@ -53,8 +53,37 @@ def _setup(options):
         return {"ok": True, "status": "dry_run"}
     raw = getpass.getpass("请粘贴 Bark 推送 URL（输入不可见）：")
     endpoint = BarkEndpoint.parse(raw)
-    view = Binding().save(endpoint)
-    return {"ok": True, "status": "bound", "host": view["host"]}
+    binding = Binding()
+    previous = _load_previous_binding(binding)
+    view = binding.save(endpoint)
+    tested = Deliverer().test({})
+    if tested.get("status") != "accepted":
+        if tested.get("category") in ("timeout", "network_error"):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "test_unconfirmed",
+                    "message": "测试通知超时或未能连接，绑定已保留",
+                    "result": tested,
+                },
+            }
+        _restore_previous_binding(binding, previous)
+        return {
+            "ok": False,
+            "error": {
+                "code": "test_not_accepted",
+                "message": "测试通知未被 Bark 接受",
+                "result": tested,
+            },
+        }
+    written = commit_agents()
+    return {
+        "ok": True,
+        "status": "bound",
+        "host": view["host"],
+        "test": "accepted",
+        "agents": written,
+    }
 
 
 def _doctor(deliverer):
