@@ -81,7 +81,19 @@ def _setup(options):
                 "result": tested,
             },
         }
-    written = commit_agents()
+    try:
+        written = commit_agents()
+    except Exception:
+        return {
+            "ok": False,
+            "status": "bound",
+            "host": view["host"],
+            "test": "accepted",
+            "error": {
+                "code": "agents_write_failed",
+                "message": "测试通知已被接受，卡在写入托管规则",
+            },
+        }
     return {
         "ok": True,
         "status": "bound",

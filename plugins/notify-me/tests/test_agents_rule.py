@@ -20,6 +20,7 @@ from notify_me.binding import Binding  # noqa: E402
 from notify_me.cli import _options, main  # noqa: E402
 from notify_me.deliver import Deliverer  # noqa: E402
 from notify_me.errors import NotifyMeError  # noqa: E402
+from notify_me.install import run_install  # noqa: E402
 
 
 class _CountTransport:
@@ -318,6 +319,82 @@ class CliTests(unittest.TestCase):
         self.assertTrue(agents.is_file())
         self.assertTrue(has_managed_block(agents.read_text(encoding="utf-8")))
         self.assertIn("agents", payload)
+
+    def test_setup_accepted_test_does_not_look_unbound_when_agents_write_fails(self):
+        from io import StringIO
+        from unittest import mock
+
+        transport = _CountTransport()
+        agents = Path(self.tmpdir.name) / "AGENTS.md"
+        agents.mkdir()
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://api.day.app/Abcdefgh1234",
+        ), mock.patch(
+            "notify_me.cli.Deliverer",
+            side_effect=lambda *args, **kwargs: Deliverer(
+                binding=kwargs.get("binding") or Binding(Path(self.tmpdir.name)),
+                transport=transport,
+            ),
+        ), mock.patch("sys.stdout", buf):
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        error = payload.get("error") or {}
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload.get("ok"))
+        self.assertGreater(transport.calls, 0)
+        self.assertEqual(payload.get("status"), "bound")
+        self.assertEqual(payload.get("test"), "accepted")
+        self.assertEqual(payload.get("host"), "api.day.app")
+        self.assertEqual(error.get("code"), "agents_write_failed")
+        self.assertEqual(error.get("message"), "测试通知已被接受，卡在写入托管规则")
+        self.assertNotEqual(error.get("code"), "internal_error")
+        self.assertNotEqual(error.get("code"), "test_not_accepted")
+        self.assertNotEqual(error.get("code"), "test_unconfirmed")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "Abcdefgh1234")
+        self.assertFalse(has_managed_block())
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+
+    def test_install_accepted_test_does_not_look_unbound_when_agents_write_fails(self):
+        from unittest import mock
+
+        transport = _CountTransport()
+        agents = Path(self.tmpdir.name) / "AGENTS.md"
+        agents.mkdir()
+        with mock.patch("notify_me.install._require_tty"), mock.patch(
+            "notify_me.install._ensure_plugin",
+            return_value=Path(self.tmpdir.name),
+        ), mock.patch("notify_me.install._ensure_mcp"), mock.patch(
+            "notify_me.install.getpass.getpass",
+            return_value="https://api.day.app/Abcdefgh1234",
+        ), mock.patch(
+            "notify_me.install.Deliverer",
+            side_effect=lambda *args, **kwargs: Deliverer(
+                binding=kwargs.get("binding") or Binding(Path(self.tmpdir.name)),
+                transport=transport,
+            ),
+        ):
+            result = run_install()
+        error = result.get("error") or {}
+        self.assertFalse(result.get("ok"))
+        self.assertGreater(transport.calls, 0)
+        self.assertEqual(result.get("status"), "bound")
+        self.assertEqual(result.get("test"), "accepted")
+        self.assertEqual(result.get("host"), "api.day.app")
+        self.assertEqual(error.get("code"), "agents_write_failed")
+        self.assertEqual(error.get("message"), "测试通知已被接受，卡在写入托管规则")
+        self.assertNotEqual(error.get("code"), "internal_error")
+        self.assertNotEqual(error.get("code"), "test_not_accepted")
+        self.assertNotEqual(error.get("code"), "test_unconfirmed")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "Abcdefgh1234")
+        self.assertFalse(has_managed_block())
+        self.assertNotIn("state_home", result)
 
     def test_setup_timeout_keeps_binding_without_writing_agents(self):
         from io import StringIO

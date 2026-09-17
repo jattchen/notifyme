@@ -232,7 +232,20 @@ def run_install():
                 "result": tested,
             },
         }
-    written = commit_agents()
+    try:
+        written = commit_agents()
+    except Exception:
+        _say("测试通知已发送。卡在写入托管规则。")
+        return {
+            "ok": False,
+            "status": "bound",
+            "host": view["host"],
+            "test": "accepted",
+            "error": {
+                "code": "agents_write_failed",
+                "message": "测试通知已被接受，卡在写入托管规则",
+            },
+        }
     _say("测试通知已发送。已写入 {}。请新开一局 Grok。".format(written["target"]))
     entry = write_stable_entry() or stable_entry_path()
     script = plugin_dir / "scripts" / "notify_me.py"
