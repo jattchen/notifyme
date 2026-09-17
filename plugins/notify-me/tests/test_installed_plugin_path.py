@@ -724,6 +724,32 @@ class InstallShResolverTests(unittest.TestCase):
         self.assertEqual(entry_result.returncode, 0, entry_result.stderr)
         self.assertEqual(Path(entry_result.stdout.strip()).resolve(), current)
 
+    def test_resolvers_fallback_when_newest_complete_import_fails(self):
+        older = _make_real_plugin(self.installed, "notify-me-usable", mtime=1_000)
+        newest = _make_old_api_plugin(self.installed, "notify-me-broken", mtime=2_000)
+        newest_paths = newest / "scripts" / "notify_me" / "paths.py"
+        self.assertTrue((newest / "scripts" / "notify_me.py").is_file())
+        self.assertTrue((newest / "scripts" / "mcp_server.py").is_file())
+        self.assertTrue(newest_paths.is_file())
+        self.assertNotIn(
+            "installed_plugin_root",
+            newest_paths.read_text(encoding="utf-8"),
+        )
+        self.assertGreater(newest.stat().st_mtime_ns, older.stat().st_mtime_ns)
+
+        install_result = _run_install_sh_resolver(self.home)
+        self.assertNotIn("ImportError", install_result.stderr, install_result.stderr)
+        self.assertEqual(install_result.returncode, 0, install_result.stderr)
+        self.assertEqual(Path(install_result.stdout.strip()).resolve(), older)
+        self.assertNotEqual(Path(install_result.stdout.strip()).resolve(), newest)
+
+        entry_result = _run_written_stable_entry_resolver(self.home)
+        self.assertNotIn("ImportError", entry_result.stderr, entry_result.stderr)
+        self.assertNotIn("notify-me is not installed", entry_result.stderr)
+        self.assertEqual(entry_result.returncode, 0, entry_result.stderr)
+        self.assertEqual(Path(entry_result.stdout.strip()).resolve(), older)
+        self.assertNotEqual(Path(entry_result.stdout.strip()).resolve(), newest)
+
     def test_install_sh_resolver_prefers_current_over_first_importable_leftover(self):
         leftover, current = _importable_leftover_first_then_current(self.installed)
         candidates = list(self.installed.glob("notify-me-*"))
