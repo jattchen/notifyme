@@ -106,7 +106,11 @@ def serve(deliverer=None, tool_name=None):
         method = message.get("method")
         msg_id = message.get("id")
         if method == "initialize":
-            version = _negotiate_version(message.get("params") or {})
+            params = message.get("params") or {}
+            if not isinstance(params, dict):
+                _write_rpc_error(-32602, "Invalid params", msg_id)
+                continue
+            version = _negotiate_version(params)
             _write_message(
                 {
                     "jsonrpc": "2.0",
