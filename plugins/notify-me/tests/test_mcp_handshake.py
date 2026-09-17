@@ -130,7 +130,10 @@ class McpHandshakeTests(unittest.TestCase):
             tool = tools[0]
             self.assertEqual(tool["name"], "notify_me")
             props = tool["inputSchema"]["properties"]
-            self.assertEqual(set(props), {"op", "condition", "item_id", "state", "message", "dry_run"})
+            self.assertEqual(
+                set(props),
+                {"op", "condition", "item_id", "state", "message", "dry_run", "workspace"},
+            )
             self.assertEqual(props["op"]["enum"], ["send", "test"])
             self.assertEqual(
                 props["condition"]["enum"],
@@ -208,7 +211,10 @@ class McpHandshakeTests(unittest.TestCase):
             tools = listed["result"]["tools"]
             self.assertEqual([tool["name"] for tool in tools], ["notifyme"])
             props = tools[0]["inputSchema"]["properties"]
-            self.assertEqual(set(props), {"op", "condition", "item_id", "state", "message", "dry_run"})
+            self.assertEqual(
+                set(props),
+                {"op", "condition", "item_id", "state", "message", "dry_run", "workspace"},
+            )
         finally:
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream:

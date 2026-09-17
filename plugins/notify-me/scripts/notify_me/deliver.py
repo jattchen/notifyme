@@ -196,6 +196,14 @@ TOOL_SCHEMA = {
                 "type": "boolean",
                 "description": "If true, do not POST to Bark and do not record dedup.",
             },
+            "workspace": {
+                "type": "string",
+                "description": (
+                    "Absolute project root for this send. Use it when the MCP "
+                    "process has no GROK_WORKSPACE_ROOT or CLAUDE_PROJECT_DIR, "
+                    "so two projects with the same item stay distinct."
+                ),
+            },
         },
         "required": ["op"],
         "additionalProperties": False,
@@ -251,6 +259,18 @@ def _workspace_root(start, home):
     except OSError:
         return None
     return None
+
+
+def _env_with_call_workspace(params, env):
+    value = (params or {}).get("workspace")
+    if not isinstance(value, str):
+        return env
+    stripped = value.strip()
+    if not stripped:
+        return env
+    merged = dict(os.environ if env is None else env)
+    merged["GROK_WORKSPACE_ROOT"] = stripped
+    return merged
 
 
 def _workspace_from_env(env):
@@ -434,6 +454,7 @@ class Deliverer:
         state = _required(params, "state")
         message = _required(params, "message")
         dry_run = _dry_run(params)
+        env = _env_with_call_workspace(params, env)
         key = (workspace_identity(env), item_id, state, condition)
         with _AcceptedSendLock(self.binding.home):
             accepted_keys, accepted_corrupt = self._load_accepted()
