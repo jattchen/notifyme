@@ -522,6 +522,72 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("state_home", payload)
         self.assertNotIn("state_home", buf.getvalue())
 
+    def test_doctor_mcp_pointing_at_leftover_is_not_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        home = Path(self.tmpdir.name)
+        installed = home / "installed-plugins"
+        leftover = installed / "notify-me-oldhash"
+        current = installed / "notify-me-current"
+        for plugin, mtime in ((leftover, 1_000), (current, 2_000)):
+            scripts = plugin / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "notify_me.py").write_text("# notify-me\n", encoding="utf-8")
+            (scripts / "mcp_server.py").write_text("# mcp\n", encoding="utf-8")
+            package = scripts / "notify_me"
+            package.mkdir()
+            (package / "paths.py").write_text("# paths\n", encoding="utf-8")
+            os.utime(plugin, (mtime, mtime))
+        leftover_server = leftover.resolve() / "scripts" / "mcp_server.py"
+        listed = (
+            "  notify_me: python3 -u {0}\n"
+            "  notifyme: python3 -u {0} --name notifyme\n"
+        ).format(leftover_server)
+        bindir = home / "bin"
+        bindir.mkdir()
+        grok = bindir / "grok"
+        grok.write_text(
+            """#!/bin/sh
+if [ "$1" = mcp ] && [ "$2" = list ]; then
+  printf '%s\\n' "$GROK_MCP_LIST"
+  exit 0
+fi
+if [ "$1" = mcp ]; then
+  printf '%s\\n' "$*" >> "$GROK_MCP_ADD_LOG"
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        grok.chmod(0o755)
+        mutate_log = home / "mcp-mutate.log"
+        buf = StringIO()
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = "{}:{}".format(bindir, old_path or "")
+        os.environ["GROK_MCP_LIST"] = listed
+        os.environ["GROK_MCP_ADD_LOG"] = str(mutate_log)
+        try:
+            with mock.patch("sys.stdout", buf):
+                code = main(["doctor"])
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+            os.environ.pop("GROK_MCP_LIST", None)
+            os.environ.pop("GROK_MCP_ADD_LOG", None)
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")),
+            "doctor must not treat leftover MCP as ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertEqual(payload.get("error", {}).get("code"), "mcp_stale")
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertFalse(mutate_log.exists())
+
     def test_doctor_symlink_binding_is_not_unbound_ok(self):
         from io import StringIO
         from unittest import mock

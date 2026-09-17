@@ -12,6 +12,7 @@ from .deliver import Deliverer
 from .errors import NotifyMeError
 from .paths import (
     PLUGIN_DIR_PREFIX,
+    grok_home,
     installed_plugin_root,
     stable_entry_path,
     write_stable_entry,
@@ -132,6 +133,40 @@ def _mcp_name_listed(text, name):
         if line.strip().startswith(prefix):
             return True
     return False
+
+
+def _mcp_row_mentions(text, name, needle):
+    prefix = name + ":"
+    marker = str(needle)
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix) and marker in stripped:
+            return True
+    return False
+
+
+def _check_mcp_current(plugin_dir=None):
+    dest = plugin_dir if plugin_dir is not None else installed_plugin_root()
+    if dest is None:
+        return
+    server = Path(dest) / "scripts" / "mcp_server.py"
+    try:
+        listed = _run(["grok", "mcp", "list"], check=False)
+    except OSError:
+        return
+    text = (listed.stdout or "") + (listed.stderr or "")
+    home = grok_home()
+    for name in ("notify_me", "notifyme"):
+        if not _mcp_name_listed(text, name):
+            continue
+        if _mcp_points_at(text, name, server):
+            continue
+        if not _mcp_row_mentions(text, name, home):
+            continue
+        raise NotifyMeError(
+            "mcp_stale",
+            "MCP 仍指向旧插件，未指向当前 mcp_server.py",
+        )
 
 
 def _ensure_mcp(plugin_dir):
