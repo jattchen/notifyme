@@ -304,6 +304,20 @@ TOOL_SCHEMA = {
             },
         },
         "required": ["op"],
+        "allOf": [
+            {
+                "if": {"properties": {"op": {"const": "send"}}},
+                "then": {
+                    "required": [
+                        "condition",
+                        "item_id",
+                        "state",
+                        "message",
+                        "workspace",
+                    ]
+                },
+            }
+        ],
         "additionalProperties": False,
     },
 }
@@ -549,6 +563,11 @@ class Deliverer:
         item_id = _required(params, "item_id")
         state = _required(params, "state")
         message = _required(params, "message")
+        workspace = (params or {}).get("workspace")
+        if not isinstance(workspace, str) or not workspace.strip():
+            raise NotifyMeError("invalid_arguments", "send 必须包含 workspace")
+        if not Path(workspace.strip()).expanduser().is_absolute():
+            raise NotifyMeError("invalid_arguments", "workspace 必须是绝对路径")
         dry_run = _dry_run(params)
         env = _env_with_call_workspace(params, env)
         key = (workspace_identity(env), item_id, state, condition)

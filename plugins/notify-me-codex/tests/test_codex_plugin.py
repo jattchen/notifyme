@@ -71,6 +71,23 @@ class CodexPackageTests(unittest.TestCase):
             self.assertIn(workspace.name, result["title"])
             self.assertFalse((state / "accepted.json").exists())
 
+    def test_send_rejects_missing_workspace(self):
+        from notify_me.errors import NotifyMeError
+
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaises(NotifyMeError) as raised:
+                Deliverer(binding=Binding(Path(raw) / "state")).dispatch(
+                    {
+                        "op": "send",
+                        "condition": "answer",
+                        "item_id": "question-1",
+                        "state": "waiting",
+                        "message": "请提供必要信息",
+                        "dry_run": True,
+                    }
+                )
+            self.assertEqual(raised.exception.code, "invalid_arguments")
+
     def test_mcp_initialize_advertises_instructions_and_single_tool(self):
         env = os.environ.copy()
         with tempfile.TemporaryDirectory() as raw:
