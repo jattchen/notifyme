@@ -120,6 +120,42 @@ DEFAULT_BARK_ICON_URL = (
     "https://cdn.jsdelivr.net/gh/jattchen/grok-build-bark-icon@main/grok-build-icon.png"
 )
 ACCEPTED_FILENAME = "accepted.json"
+_SKIP_ACCEPTED = object()
+
+
+def _accepted_key(item):
+    if isinstance(item, dict):
+        if "item_id" not in item or "state" not in item or "condition" not in item:
+            return None
+        workspace = item.get("workspace", "")
+        item_id = item["item_id"]
+        state = item["state"]
+        condition = item["condition"]
+        if not all(
+            isinstance(part, str)
+            for part in (workspace, item_id, state, condition)
+        ):
+            return None
+        return (workspace, item_id, state, condition)
+    if not (isinstance(item, list) and all(isinstance(part, str) for part in item)):
+        return None
+    if len(item) == 4:
+        return (item[0], item[1], item[2], item[3])
+    if len(item) == 3:
+        return ("", item[0], item[1], item[2])
+    return _SKIP_ACCEPTED
+
+
+def _accepted_record(key):
+    workspace, item_id, state, condition = key
+    return {
+        "workspace": workspace,
+        "item_id": item_id,
+        "state": state,
+        "condition": condition,
+    }
+
+
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
     "description": TOOL_DESCRIPTION,
@@ -321,15 +357,11 @@ class Deliverer:
                 )
             return keys
         for item in data:
-            if (
-                isinstance(item, list)
-                and all(isinstance(part, str) for part in item)
-                and len(item) in (3, 4)
-            ):
-                if len(item) == 4:
-                    keys.add((item[0], item[1], item[2], item[3]))
-                else:
-                    keys.add(("", item[0], item[1], item[2]))
+            key = _accepted_key(item)
+            if key is _SKIP_ACCEPTED:
+                continue
+            if key is not None:
+                keys.add(key)
                 continue
             if fail_closed:
                 raise NotifyMeError(
@@ -357,7 +389,10 @@ class Deliverer:
         keys.add(key)
         self._accepted = keys
         home = self.binding.home
-        payload = json.dumps([list(item) for item in sorted(keys)], ensure_ascii=False)
+        payload = json.dumps(
+            [_accepted_record(item) for item in sorted(keys)],
+            ensure_ascii=False,
+        )
         fd, tmp = tempfile.mkstemp(dir=str(home), prefix=".accepted.")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

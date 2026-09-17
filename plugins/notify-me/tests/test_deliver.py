@@ -406,6 +406,67 @@ class DeliverTests(unittest.TestCase):
         self.assertNotEqual(result.get("status"), "accepted")
         self.assertEqual(self.transport.calls, 0)
 
+    def test_accepted_records_use_named_fields_not_array_length(self):
+        accepted_path = Path(self.tmpdir.name) / "accepted.json"
+        accepted_path.write_text(
+            json.dumps(
+                [
+                    ["", "five-item", "open", "answer", "future-session"],
+                    {
+                        "workspace": "",
+                        "item_id": "wait-token",
+                        "state": "missing",
+                        "condition": "answer",
+                        "session": "future-extra",
+                    },
+                    ["", "legacy-item", "open", "done"],
+                ]
+            ),
+            encoding="utf-8",
+        )
+        other = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=self.transport,
+        )
+        named = other.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertEqual(named["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 0)
+        legacy = other.send(
+            {
+                "condition": "done",
+                "item_id": "legacy-item",
+                "state": "open",
+                "message": "任务已完成",
+            }
+        )
+        self.assertEqual(legacy["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 0)
+        five = other.send(
+            {
+                "condition": "answer",
+                "item_id": "five-item",
+                "state": "open",
+                "message": "五元数组不应整表失效",
+            }
+        )
+        self.assertEqual(five["status"], "accepted")
+        self.assertEqual(self.transport.calls, 1)
+        recorded = json.loads(accepted_path.read_text(encoding="utf-8"))
+        self.assertTrue(recorded)
+        for item in recorded:
+            self.assertIsInstance(item, dict)
+            self.assertEqual(
+                set(item),
+                {"workspace", "item_id", "state", "condition"},
+            )
+
     def test_answer_then_done_same_incident_both_accepted(self):
         first = self.deliverer.send(
             {
