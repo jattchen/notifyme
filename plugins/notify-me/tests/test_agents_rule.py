@@ -426,6 +426,76 @@ class CliTests(unittest.TestCase):
         self.assertEqual(bound.key, "NewSlowKey1234")
         self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
 
+    def test_setup_unconfirmed_rebind_keeps_old_working_key(self):
+        from io import StringIO
+        from unittest import mock
+
+        old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
+        Binding().save(old)
+        timed_out = {
+            "ok": False,
+            "status": "failed",
+            "category": "timeout",
+            "http_status": None,
+            "attempts": 1,
+        }
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://bark.example.com/NewSlowKey1234",
+        ), mock.patch("notify_me.cli.Deliverer") as deliverer_cls, mock.patch(
+            "sys.stdout", buf
+        ):
+            deliverer_cls.return_value.test.return_value = timed_out
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload.get("ok"))
+        self.assertEqual(payload.get("error", {}).get("code"), "test_unconfirmed")
+        self.assertNotEqual(payload.get("status"), "bound")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "OldWorkingKey1")
+        self.assertNotEqual(bound.key, "NewSlowKey1234")
+        self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("OldWorkingKey1", buf.getvalue())
+        self.assertNotIn("NewSlowKey1234", buf.getvalue())
+
+    def test_install_unconfirmed_rebind_keeps_old_working_key(self):
+        from unittest import mock
+
+        old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
+        Binding().save(old)
+        timed_out = {
+            "ok": False,
+            "status": "failed",
+            "category": "timeout",
+            "http_status": None,
+            "attempts": 1,
+        }
+        with mock.patch("notify_me.install._require_tty"), mock.patch(
+            "notify_me.install._ensure_plugin",
+            return_value=Path(self.tmpdir.name),
+        ), mock.patch("notify_me.install._ensure_mcp"), mock.patch(
+            "notify_me.install.getpass.getpass",
+            return_value="https://bark.example.com/NewSlowKey1234",
+        ), mock.patch("notify_me.install.Deliverer") as deliverer_cls:
+            deliverer_cls.return_value.test.return_value = timed_out
+            result = run_install()
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error", {}).get("code"), "test_unconfirmed")
+        self.assertNotEqual(result.get("status"), "bound")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "OldWorkingKey1")
+        self.assertNotEqual(bound.key, "NewSlowKey1234")
+        self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
+        self.assertNotIn("state_home", result)
+        self.assertNotIn("OldWorkingKey1", json.dumps(result, ensure_ascii=False))
+        self.assertNotIn("NewSlowKey1234", json.dumps(result, ensure_ascii=False))
+
     def test_setup_rejected_test_does_not_claim_bound_or_write_agents(self):
         from io import StringIO
         from unittest import mock
