@@ -13,6 +13,8 @@ from .errors import NotifyMeError
 from .paths import chmod_private_file
 
 _THREAD_SEND_LOCK = threading.RLock()
+_IN_FLIGHT = set()
+_IN_FLIGHT_COND = threading.Condition(_THREAD_SEND_LOCK)
 ACCEPTED_LOCK_FILENAME = "accepted.lock"
 
 
@@ -456,45 +458,57 @@ class Deliverer:
         dry_run = _dry_run(params)
         env = _env_with_call_workspace(params, env)
         key = (workspace_identity(env), item_id, state, condition)
-        with _AcceptedSendLock(self.binding.home):
-            accepted_keys, accepted_corrupt = self._load_accepted()
-            if key in accepted_keys:
-                return {
-                    "ok": True,
-                    "status": "deduplicated",
-                    "item_id": item_id,
-                    "state": state,
-                }
-            if accepted_corrupt:
-                raise NotifyMeError(
-                    "invalid_accepted",
-                    "accepted.json 无法作为记录列表读取",
-                )
-            project = project_name(env)
-            title = _compose_title(condition, project)
-            body = message
-            effect = EFFECTS[condition]
-            group = project or "Grok"
-            if dry_run:
-                return {
-                    "ok": True,
-                    "status": "dry_run",
-                    "condition": condition,
-                    "item_id": item_id,
-                    "state": state,
-                    "title": title,
-                    "body": body,
-                }
+        project = project_name(env)
+        title = _compose_title(condition, project)
+        body = message
+        effect = EFFECTS[condition]
+        group = project or "Grok"
+        reserved = False
+        try:
+            while True:
+                with _AcceptedSendLock(self.binding.home):
+                    accepted_keys, accepted_corrupt = self._load_accepted()
+                    if key in accepted_keys:
+                        return {
+                            "ok": True,
+                            "status": "deduplicated",
+                            "item_id": item_id,
+                            "state": state,
+                        }
+                    if accepted_corrupt:
+                        raise NotifyMeError(
+                            "invalid_accepted",
+                            "accepted.json 无法作为记录列表读取",
+                        )
+                    if dry_run:
+                        return {
+                            "ok": True,
+                            "status": "dry_run",
+                            "condition": condition,
+                            "item_id": item_id,
+                            "state": state,
+                            "title": title,
+                            "body": body,
+                        }
+                    if key not in _IN_FLIGHT:
+                        _IN_FLIGHT.add(key)
+                        reserved = True
+                if reserved:
+                    break
+                with _IN_FLIGHT_COND:
+                    if key in _IN_FLIGHT:
+                        _IN_FLIGHT_COND.wait()
             endpoint = self.binding.load()
             payload = _build_payload(endpoint, title, body, effect, group=group)
             result = self.transport.send_with_retry(endpoint, payload)
             if result.accepted:
-                self._accepted.add(key)
                 persisted = False
-                try:
-                    persisted = bool(self._record_accepted(key))
-                except Exception:
-                    persisted = False
+                with _AcceptedSendLock(self.binding.home):
+                    self._accepted.add(key)
+                    try:
+                        persisted = bool(self._record_accepted(key))
+                    except Exception:
+                        persisted = False
                 accepted = {
                     "ok": True,
                     "status": "accepted",
@@ -514,6 +528,11 @@ class Deliverer:
                 "http_status": result.http_status,
                 "attempts": result.attempts,
             }
+        finally:
+            if reserved:
+                with _IN_FLIGHT_COND:
+                    _IN_FLIGHT.discard(key)
+                    _IN_FLIGHT_COND.notify_all()
 
     def test(self, params, env=None):
         dry_run = _dry_run(params)

@@ -359,6 +359,92 @@ class DeliverTests(unittest.TestCase):
         statuses = sorted(result["status"] for result in results)
         self.assertEqual(statuses, ["accepted", "deduplicated"])
 
+    def test_overlapping_sends_different_keys_do_not_wait_for_http(self):
+        first_started = threading.Event()
+        first_release = threading.Event()
+        second_started = threading.Event()
+        count_lock = threading.Lock()
+
+        class GatedTransport:
+            def __init__(self):
+                self.payloads = []
+                self.calls = 0
+
+            def send_with_retry(self, endpoint, payload, sleep=None, max_attempts=2):
+                assert payload.get("device_key") == endpoint.key
+                assert payload.get("body")
+                with count_lock:
+                    self.calls += 1
+                    self.payloads.append(
+                        {key: value for key, value in payload.items() if key != "device_key"}
+                    )
+                if payload.get("body") == "任务已完成":
+                    first_started.set()
+                    if not first_release.wait(timeout=5):
+                        raise AssertionError("first transport gate was not released")
+                else:
+                    second_started.set()
+                return TransportResult(True, False, "accepted", 200, 1)
+
+        transport = GatedTransport()
+        first = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=transport,
+        )
+        second = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=transport,
+        )
+        results = [None, None]
+        errors = [None, None]
+
+        def run(index, deliverer, params):
+            try:
+                results[index] = deliverer.send(params)
+            except Exception as exc:
+                errors[index] = exc
+
+        worker = threading.Thread(
+            target=run,
+            args=(
+                0,
+                first,
+                {
+                    "condition": "done",
+                    "item_id": "task-slow",
+                    "state": "open",
+                    "message": "任务已完成",
+                },
+            ),
+        )
+        overlap = threading.Thread(
+            target=run,
+            args=(
+                1,
+                second,
+                {
+                    "condition": "severe-risk",
+                    "item_id": "drop-prod",
+                    "state": "confirm",
+                    "message": "确认后将清空生产数据",
+                },
+            ),
+        )
+        worker.start()
+        self.assertTrue(first_started.wait(timeout=5))
+        overlap.start()
+        self.assertTrue(second_started.wait(timeout=5))
+        first_release.set()
+        worker.join(timeout=5)
+        overlap.join(timeout=5)
+        self.assertIsNone(errors[0])
+        self.assertIsNone(errors[1])
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(overlap.is_alive())
+        self.assertEqual(transport.calls, 2)
+        self.assertEqual(results[0]["status"], "accepted")
+        self.assertEqual(results[1]["status"], "accepted")
+
     def test_accepted_persist_survives_replace_failure_across_deliverers(self):
         other = Deliverer(
             binding=Binding(Path(self.tmpdir.name)),
