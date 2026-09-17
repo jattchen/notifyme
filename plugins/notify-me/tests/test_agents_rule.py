@@ -287,6 +287,100 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "dry_run")
         self.assertFalse((Path(self.tmpdir.name) / "binding.json").exists())
 
+    def test_setup_does_not_claim_bound_without_test_or_agents(self):
+        from io import StringIO
+        from unittest import mock
+
+        transport = _CountTransport()
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://api.day.app/Abcdefgh1234",
+        ), mock.patch(
+            "notify_me.cli.Deliverer",
+            side_effect=lambda *args, **kwargs: Deliverer(
+                binding=kwargs.get("binding") or Binding(Path(self.tmpdir.name)),
+                transport=transport,
+            ),
+        ), mock.patch("sys.stdout", buf):
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        agents = Path(self.tmpdir.name) / "AGENTS.md"
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertNotEqual(
+            (payload.get("status"), payload.get("test"), transport.calls, agents.is_file()),
+            ("bound", None, 0, False),
+            "setup must not report bound when no test ran and AGENTS was not written",
+        )
+        self.assertGreater(transport.calls, 0)
+        self.assertEqual(payload.get("test"), "accepted")
+        self.assertTrue(agents.is_file())
+        self.assertTrue(has_managed_block(agents.read_text(encoding="utf-8")))
+        self.assertIn("agents", payload)
+
+    def test_setup_timeout_keeps_binding_without_writing_agents(self):
+        from io import StringIO
+        from unittest import mock
+
+        timed_out = {
+            "ok": False,
+            "status": "failed",
+            "category": "timeout",
+            "http_status": None,
+            "attempts": 1,
+        }
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://bark.example.com/NewSlowKey1234",
+        ), mock.patch("notify_me.cli.Deliverer") as deliverer_cls, mock.patch(
+            "sys.stdout", buf
+        ):
+            deliverer_cls.return_value.test.return_value = timed_out
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload.get("ok"))
+        self.assertEqual(payload.get("error", {}).get("code"), "test_unconfirmed")
+        self.assertNotEqual(payload.get("status"), "bound")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "bark.example.com")
+        self.assertEqual(bound.key, "NewSlowKey1234")
+        self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
+
+    def test_setup_rejected_test_does_not_claim_bound_or_write_agents(self):
+        from io import StringIO
+        from unittest import mock
+
+        old = BarkEndpoint.parse("https://api.day.app/OldWorkingKey1")
+        Binding().save(old)
+        rejected = {
+            "ok": False,
+            "status": "failed",
+            "category": "http",
+            "http_status": 400,
+            "attempts": 1,
+        }
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://bark.example.com/NewTypoKey123",
+        ), mock.patch("notify_me.cli.Deliverer") as deliverer_cls, mock.patch(
+            "sys.stdout", buf
+        ):
+            deliverer_cls.return_value.test.return_value = rejected
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload.get("ok"))
+        self.assertEqual(payload.get("error", {}).get("code"), "test_not_accepted")
+        self.assertNotEqual(payload.get("status"), "bound")
+        bound = Binding().load()
+        self.assertEqual(bound.host, "api.day.app")
+        self.assertEqual(bound.key, "OldWorkingKey1")
+        self.assertFalse((Path(self.tmpdir.name) / "AGENTS.md").exists())
+
     def test_agents_rule_plan_json(self):
         from io import StringIO
         from unittest import mock
