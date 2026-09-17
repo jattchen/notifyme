@@ -115,6 +115,48 @@ def _run_install_sh_resolver(grok_dir):
     return result
 
 
+def _make_old_api_plugin(installed, name, mtime=None):
+    root = _make_plugin(installed, name, mtime=mtime)
+    (root / "scripts" / "notify_me" / "__init__.py").write_text("", encoding="utf-8")
+    return root
+
+
+def _old_api_first_then_current(installed):
+    leftover = _make_old_api_plugin(installed, "notify-me-oldapi", mtime=1_000)
+    current = _make_real_plugin(installed, "notify-me-current", mtime=2_000)
+    candidates = list(installed.glob("notify-me-*"))
+    first = candidates[0]
+    if first.resolve() != leftover:
+        later = next(path for path in candidates if path.resolve() != first.resolve())
+        shutil.rmtree(first)
+        shutil.rmtree(later)
+        leftover = _make_old_api_plugin(installed, first.name, mtime=1_000)
+        current = _make_real_plugin(installed, later.name, mtime=2_000)
+    return leftover, current
+
+
+def _run_written_stable_entry_resolver(grok_dir):
+    dest = notify_me_paths.write_stable_entry(grok_dir)
+    source = Path(dest).read_text(encoding="utf-8")
+    prefix, _, _ = source.partition("resolve = _resolver()")
+    runner = prefix + (
+        "resolve = _resolver()\n"
+        "root = resolve() if resolve is not None else None\n"
+        "if root is None:\n"
+        "    raise SystemExit(1)\n"
+        "print(root)\n"
+    )
+    env = os.environ.copy()
+    env["GROK_HOME"] = str(grok_dir)
+    return subprocess.run(
+        [sys.executable, "-"],
+        input=runner,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 class InstalledPluginRootTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -496,6 +538,30 @@ class InstallShResolverTests(unittest.TestCase):
         result = _run_install_sh_resolver(self.home)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "")
+
+    def test_resolvers_skip_complete_old_api_without_installed_plugin_root(self):
+        leftover, current = _old_api_first_then_current(self.installed)
+        candidates = list(self.installed.glob("notify-me-*"))
+        self.assertEqual(candidates[0].resolve(), leftover)
+        self.assertIn(current, [path.resolve() for path in candidates[1:]])
+        leftover_paths = leftover / "scripts" / "notify_me" / "paths.py"
+        self.assertTrue((leftover / "scripts" / "notify_me.py").is_file())
+        self.assertTrue((leftover / "scripts" / "mcp_server.py").is_file())
+        self.assertTrue(leftover_paths.is_file())
+        self.assertNotIn(
+            "installed_plugin_root",
+            leftover_paths.read_text(encoding="utf-8"),
+        )
+
+        install_result = _run_install_sh_resolver(self.home)
+        self.assertNotIn("ImportError", install_result.stderr, install_result.stderr)
+        self.assertEqual(install_result.returncode, 0, install_result.stderr)
+        self.assertEqual(Path(install_result.stdout.strip()).resolve(), current)
+
+        entry_result = _run_written_stable_entry_resolver(self.home)
+        self.assertNotIn("ImportError", entry_result.stderr, entry_result.stderr)
+        self.assertEqual(entry_result.returncode, 0, entry_result.stderr)
+        self.assertEqual(Path(entry_result.stdout.strip()).resolve(), current)
 
 
 def _write_grok_mcp_stub(bindir):
