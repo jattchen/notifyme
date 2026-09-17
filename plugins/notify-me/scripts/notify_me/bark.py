@@ -232,13 +232,13 @@ class BarkTransport:
             retryable, category = _classify_http_status(status)
             return TransportResult(False, retryable, category, status)
         if not isinstance(body, (bytes, bytearray)) or len(body) > 65536 or not body:
-            return TransportResult(False, True, "invalid_response", status)
+            return TransportResult(False, False, "invalid_response", status)
         try:
             response_json = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, ValueError, TypeError):
-            return TransportResult(False, True, "invalid_response", status)
+            return TransportResult(False, False, "invalid_response", status)
         if not isinstance(response_json, dict):
-            return TransportResult(False, True, "invalid_response", status)
+            return TransportResult(False, False, "invalid_response", status)
         if response_json.get("code") == 200:
             return TransportResult(True, False, "accepted", status)
         code = response_json.get("code")
