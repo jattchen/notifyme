@@ -569,6 +569,45 @@ class CliTests(unittest.TestCase):
         self.assertEqual((home / "binding.json").read_text(encoding="utf-8"), before)
         self.assertFalse((home / "AGENTS.md").exists())
 
+    def test_setup_wide_binding_file_is_kept_on_rejected_rebind(self):
+        import stat
+        from io import StringIO
+        from unittest import mock
+
+        home = Path(self.tmpdir.name)
+        Binding(home).save(BarkEndpoint.parse("https://api.day.app/OldWorkingKey1"))
+        path = home / "binding.json"
+        before = path.read_text(encoding="utf-8")
+        path.chmod(0o644)
+        rejected = {
+            "ok": False,
+            "status": "failed",
+            "category": "http",
+            "http_status": 400,
+            "attempts": 1,
+        }
+        buf = StringIO()
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+            "notify_me.cli.getpass.getpass",
+            return_value="https://bark.example.com/NewTypoKey123",
+        ), mock.patch("notify_me.cli.Deliverer") as deliverer_cls, mock.patch(
+            "sys.stdout", buf
+        ):
+            deliverer_cls.return_value.test.return_value = rejected
+            code = main(["setup"])
+        payload = json.loads(buf.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload.get("ok"))
+        self.assertNotEqual(payload.get("status"), "bound")
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+        self.assertNotIn("state_home", payload)
+        self.assertNotIn("state_home", buf.getvalue())
+        self.assertNotIn("OldWorkingKey1", buf.getvalue())
+        self.assertNotIn("NewTypoKey123", buf.getvalue())
+        self.assertFalse((home / "AGENTS.md").exists())
+
     def test_agents_rule_plan_json(self):
         from io import StringIO
         from unittest import mock
