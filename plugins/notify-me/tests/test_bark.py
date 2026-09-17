@@ -57,6 +57,41 @@ class BarkTests(unittest.TestCase):
         self.assertNotIn("key", view)
         self.assertNotIn("Abcdefgh1234", json.dumps(view))
 
+    def test_parse_idna_encodes_unicode_host_for_ascii_push_url(self):
+        endpoint = BarkEndpoint.parse("https://例子.com/Abcdefgh1234")
+        self.assertEqual(endpoint.host, "xn--fsqu00a.com")
+        self.assertEqual(endpoint.server, "https://xn--fsqu00a.com")
+        self.assertEqual(endpoint.push_url, "https://xn--fsqu00a.com/push")
+        endpoint.push_url.encode("ascii")
+        opener = SequenceOpener([FakeResponse(200, b'{"code":200}')])
+        transport = BarkTransport(opener=opener)
+        result = transport.send(
+            endpoint,
+            {
+                "device_key": endpoint.key,
+                "title": "任务阻塞",
+                "body": "请查看",
+            },
+        )
+        self.assertTrue(result.accepted)
+        opener.requests[0].full_url.encode("ascii")
+
+    def test_from_stored_rejects_leftover_unicode_host(self):
+        with self.assertRaises(NotifyMeError) as caught:
+            BarkEndpoint.from_stored(
+                {
+                    "server": "https://例子.com",
+                    "host": "例子.com",
+                    "key": "Abcdefgh1234",
+                }
+            )
+        self.assertEqual(caught.exception.code, "invalid_binding")
+
+    def test_parse_rejects_host_that_cannot_be_idna_encoded(self):
+        with self.assertRaises(NotifyMeError) as caught:
+            BarkEndpoint.parse("https://\ufffe.com/Abcdefgh1234")
+        self.assertEqual(caught.exception.code, "invalid_bark_url")
+
     def test_retry_posts_at_most_twice(self):
         endpoint = BarkEndpoint.parse("https://api.day.app/Abcdefgh1234")
         opener = SequenceOpener(
