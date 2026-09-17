@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 PLUGIN_DIR_PREFIX = "notify-me-"
@@ -155,9 +156,17 @@ def write_stable_entry(grok_dir=None):
         return None
     dest = stable_entry_path(grok_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.is_symlink() or dest.exists():
-        dest.unlink()
-    dest.write_text(_STABLE_ENTRY_SOURCE, encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".notify-me.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(_STABLE_ENTRY_SOURCE)
+        os.replace(tmp, dest)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
     return dest.resolve()
 
