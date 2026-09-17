@@ -313,6 +313,48 @@ class DeliverTests(unittest.TestCase):
         )
         self.assertEqual(self.transport.payloads[1]["group"], "alpha-proj")
 
+    def test_relative_workspace_does_not_share_cwd_dedup_identity(self):
+        cwd_repo = Path(self.tmpdir.name) / "mcp-cwd"
+        (cwd_repo / ".git").mkdir(parents=True)
+        mcp_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("GROK_WORKSPACE_ROOT", "CLAUDE_PROJECT_DIR")
+        }
+        params = {
+            "op": "send",
+            "condition": "answer",
+            "item_id": "wait",
+            "state": "open",
+        }
+        with mock.patch("notify_me.deliver.os.getcwd", return_value=str(cwd_repo)):
+            for workspace, message in (
+                (".", "alpha 相对路径"),
+                ("beta-proj", "beta 相对路径"),
+                ("../foo", "parent 相对路径"),
+            ):
+                with self.assertRaises(NotifyMeError) as caught:
+                    self.deliverer.dispatch(
+                        dict(params, message=message, workspace=workspace),
+                        mcp_env,
+                    )
+                self.assertEqual(caught.exception.code, "invalid_arguments")
+        self.assertEqual(self.transport.calls, 0)
+        omitted = self.deliverer.dispatch(dict(params, message="漏传 workspace"), mcp_env)
+        self.assertEqual(omitted["status"], "accepted")
+        self.assertEqual(self.transport.payloads[-1]["title"], TITLE_MARKS["answer"])
+        self.assertEqual(self.transport.payloads[-1]["group"], "Grok")
+        named = self.deliverer.dispatch(
+            dict(params, message="cwd 绝对路径", workspace=str(cwd_repo)),
+            mcp_env,
+        )
+        self.assertEqual(named["status"], "accepted")
+        self.assertEqual(
+            self.transport.payloads[-1]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "mcp-cwd"),
+        )
+        self.assertEqual(self.transport.payloads[-1]["group"], "mcp-cwd")
+
     def test_legacy_triple_does_not_suppress_named_project(self):
         accepted_path = Path(self.tmpdir.name) / "accepted.json"
         accepted_path.write_text(
