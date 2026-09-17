@@ -32,6 +32,16 @@ class CodexPackageTests(unittest.TestCase):
         self.assertEqual(server["args"][-1], "${PLUGIN_ROOT}/scripts/mcp_server.py")
         self.assertEqual(server["cwd"], "${PLUGIN_ROOT}")
 
+    def test_skill_requires_explicit_invocation(self):
+        policy = (
+            PLUGIN_ROOT
+            / "skills"
+            / "notify-me-codex"
+            / "agents"
+            / "openai.yaml"
+        ).read_text()
+        self.assertIn("allow_implicit_invocation: false", policy)
+
     def test_codex_rule_is_idempotent_and_uses_codex_tool(self):
         from notify_me import agents_rule
 

@@ -1,7 +1,6 @@
 ---
 name: notify-me-codex
 description: 安装、绑定 Bark、测试、诊断 Notify Me Codex；正常通知直接使用 MCP 工具。
-disable-model-invocation: false
 ---
 
 # Notify Me Codex

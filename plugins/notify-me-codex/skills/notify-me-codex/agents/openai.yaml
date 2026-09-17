@@ -1,0 +1,6 @@
+interface:
+  display_name: "Notify Me Codex"
+  short_description: "安装和诊断 Notify Me Codex"
+
+policy:
+  allow_implicit_invocation: false
