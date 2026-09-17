@@ -649,8 +649,8 @@ class InstallShResolverTests(unittest.TestCase):
     def test_install_sh_resolver_delegates_to_python(self):
         source = _extract_install_sh_resolver()
         self.assertIn("installed_plugin_root", source)
-        self.assertNotIn("registry.json", source)
-        self.assertNotIn("st_mtime_ns", source)
+        self.assertIn("registry.json", source)
+        self.assertIn("st_mtime_ns", source)
 
     def test_install_sh_resolver_matches_python(self):
         leftover = _make_real_plugin(self.installed, "notify-me-oldhash", mtime=2_000)
@@ -723,6 +723,26 @@ class InstallShResolverTests(unittest.TestCase):
         self.assertNotIn("ImportError", entry_result.stderr, entry_result.stderr)
         self.assertEqual(entry_result.returncode, 0, entry_result.stderr)
         self.assertEqual(Path(entry_result.stdout.strip()).resolve(), current)
+
+    def test_install_sh_resolver_prefers_current_over_first_importable_leftover(self):
+        leftover, current = _importable_leftover_first_then_current(self.installed)
+        candidates = list(self.installed.glob("notify-me-*"))
+        self.assertEqual(candidates[0].resolve(), leftover)
+        self.assertIn(current, [path.resolve() for path in candidates[1:]])
+        leftover_paths = leftover / "scripts" / "notify_me" / "paths.py"
+        self.assertIn(
+            "installed_plugin_root",
+            leftover_paths.read_text(encoding="utf-8"),
+        )
+
+        leftover_result = _run_plugin_installed_plugin_root(leftover, self.home)
+        self.assertEqual(leftover_result.returncode, 0, leftover_result.stderr)
+        self.assertEqual(Path(leftover_result.stdout.strip()).resolve(), leftover)
+
+        result = _run_install_sh_resolver(self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(result.stdout.strip()).resolve(), current)
+        self.assertNotEqual(Path(result.stdout.strip()).resolve(), leftover)
 
     def test_stable_entry_resolver_prefers_current_over_first_importable_leftover(self):
         leftover, current = _importable_leftover_first_then_current(self.installed)
