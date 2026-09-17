@@ -137,6 +137,81 @@ def _old_api_first_then_current(installed):
     return leftover, current
 
 
+_LEFTOVER_GLOB_FIRST_PATHS = """\
+import os
+from pathlib import Path
+
+
+def installed_plugin_root(grok_dir=None):
+    if grok_dir is not None:
+        grok = Path(grok_dir).expanduser()
+    else:
+        override = os.environ.get("GROK_HOME")
+        grok = Path(override).expanduser() if override else Path.home() / ".grok"
+    installed = grok / "installed-plugins"
+    try:
+        candidates = list(installed.glob("notify-me-*"))
+    except OSError:
+        return None
+    for path in candidates:
+        scripts = path / "scripts"
+        if (
+            (scripts / "notify_me.py").is_file()
+            and (scripts / "mcp_server.py").is_file()
+            and (scripts / "notify_me" / "paths.py").is_file()
+        ):
+            return path.resolve()
+    return None
+"""
+
+
+def _make_importable_leftover_plugin(installed, name, mtime=None):
+    root = _make_trap_plugin(installed, name, mtime=mtime)
+    package = root / "scripts" / "notify_me"
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "paths.py").write_text(_LEFTOVER_GLOB_FIRST_PATHS, encoding="utf-8")
+    return root
+
+
+def _importable_leftover_first_then_current(installed):
+    leftover = _make_importable_leftover_plugin(
+        installed,
+        "notify-me-oldhash",
+        mtime=1_000,
+    )
+    current = _make_real_plugin(installed, "notify-me-current", mtime=2_000)
+    candidates = list(installed.glob("notify-me-*"))
+    first = candidates[0]
+    if first.resolve() != leftover:
+        later = next(path for path in candidates if path.resolve() != first.resolve())
+        shutil.rmtree(first)
+        shutil.rmtree(later)
+        leftover = _make_importable_leftover_plugin(installed, first.name, mtime=1_000)
+        current = _make_real_plugin(installed, later.name, mtime=2_000)
+    return leftover, current
+
+
+def _run_plugin_installed_plugin_root(plugin, grok_dir):
+    env = os.environ.copy()
+    env["GROK_HOME"] = str(grok_dir)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys;"
+                "sys.path.insert(0, sys.argv[1]);"
+                "from notify_me.paths import installed_plugin_root;"
+                "print(installed_plugin_root())"
+            ),
+            str(plugin / "scripts"),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 def _run_written_stable_entry_resolver(grok_dir):
     dest = notify_me_paths.write_stable_entry(grok_dir)
     source = Path(dest).read_text(encoding="utf-8")
@@ -648,6 +723,45 @@ class InstallShResolverTests(unittest.TestCase):
         self.assertNotIn("ImportError", entry_result.stderr, entry_result.stderr)
         self.assertEqual(entry_result.returncode, 0, entry_result.stderr)
         self.assertEqual(Path(entry_result.stdout.strip()).resolve(), current)
+
+    def test_stable_entry_resolver_prefers_current_over_first_importable_leftover(self):
+        leftover, current = _importable_leftover_first_then_current(self.installed)
+        candidates = list(self.installed.glob("notify-me-*"))
+        self.assertEqual(candidates[0].resolve(), leftover)
+        self.assertIn(current, [path.resolve() for path in candidates[1:]])
+        leftover_paths = leftover / "scripts" / "notify_me" / "paths.py"
+        self.assertIn(
+            "installed_plugin_root",
+            leftover_paths.read_text(encoding="utf-8"),
+        )
+
+        leftover_result = _run_plugin_installed_plugin_root(leftover, self.home)
+        self.assertEqual(leftover_result.returncode, 0, leftover_result.stderr)
+        self.assertEqual(Path(leftover_result.stdout.strip()).resolve(), leftover)
+
+        entry_result = _run_written_stable_entry_resolver(self.home)
+        self.assertEqual(entry_result.returncode, 0, entry_result.stderr)
+        self.assertEqual(Path(entry_result.stdout.strip()).resolve(), current)
+        self.assertNotEqual(Path(entry_result.stdout.strip()).resolve(), leftover)
+
+        dest = notify_me_paths.stable_entry_path(self.home)
+        env = os.environ.copy()
+        env["GROK_HOME"] = str(self.home)
+        env["GROK_NOTIFY_ME_HOME"] = str(self.home / "state")
+        doctor = subprocess.run(
+            [sys.executable, str(dest), "doctor"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        payload = json.loads(doctor.stdout or "{}")
+        self.assertNotEqual(
+            payload.get("error", {}).get("message"),
+            "leftover",
+            doctor.stdout,
+        )
+        self.assertTrue(payload.get("ok"), doctor.stdout)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
 
 
 def _write_grok_mcp_stub(bindir):
