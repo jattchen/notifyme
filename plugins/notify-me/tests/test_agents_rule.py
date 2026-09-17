@@ -350,6 +350,25 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("Abcdefgh1234", buf.getvalue())
         self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o777)
 
+    def test_doctor_corrupt_accepted_is_not_ok(self):
+        from io import StringIO
+        from unittest import mock
+
+        path = Path(self.tmpdir.name) / "accepted.json"
+        path.write_text("{not-valid-json", encoding="utf-8")
+        path.chmod(0o600)
+        buf = StringIO()
+        with mock.patch("sys.stdout", buf):
+            code = main(["doctor"])
+        payload = json.loads(buf.getvalue())
+        self.assertFalse(
+            bool(payload.get("ok")),
+            "doctor must not treat a corrupt accepted.json as ok",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload.get("error", {}).get("code"), "invalid_accepted")
+
     def _bound_deliverer(self):
         binding = Binding(Path(self.tmpdir.name))
         binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
