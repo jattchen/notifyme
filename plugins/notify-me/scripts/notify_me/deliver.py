@@ -376,14 +376,7 @@ def _workspace_from_env(env):
     explicit = env.get("GROK_WORKSPACE_ROOT") or env.get("CLAUDE_PROJECT_DIR")
     if explicit:
         return _workspace_root(explicit, home)
-    try:
-        cwd = os.getcwd()
-    except OSError:
-        cwd = None
-    from_cwd = _workspace_root(cwd, home)
-    if from_cwd:
-        return from_cwd
-    return _workspace_root(env.get("PWD"), home)
+    return None
 
 
 def project_name(env=None):

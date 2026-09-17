@@ -272,6 +272,47 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(retry["status"], "deduplicated")
         self.assertEqual(self.transport.calls, 2)
 
+    def test_omitted_workspace_does_not_inherit_mcp_cwd(self):
+        cwd_repo = Path(self.tmpdir.name) / "alpha-proj"
+        (cwd_repo / ".git").mkdir(parents=True)
+        mcp_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("GROK_WORKSPACE_ROOT", "CLAUDE_PROJECT_DIR")
+        }
+        with mock.patch("notify_me.deliver.os.getcwd", return_value=str(cwd_repo)):
+            omitted = self.deliverer.dispatch(
+                {
+                    "op": "send",
+                    "condition": "answer",
+                    "item_id": "wait",
+                    "state": "open",
+                    "message": "漏传 workspace",
+                },
+                mcp_env,
+            )
+        self.assertEqual(omitted["status"], "accepted")
+        self.assertEqual(self.transport.payloads[0]["title"], TITLE_MARKS["answer"])
+        self.assertEqual(self.transport.payloads[0]["group"], "Grok")
+        named = self.deliverer.dispatch(
+            {
+                "op": "send",
+                "condition": "answer",
+                "item_id": "wait",
+                "state": "open",
+                "message": "alpha 在等回答",
+                "workspace": str(cwd_repo),
+            },
+            mcp_env,
+        )
+        self.assertEqual(named["status"], "accepted")
+        self.assertEqual(self.transport.calls, 2)
+        self.assertEqual(
+            self.transport.payloads[1]["title"],
+            "{} · {}".format(TITLE_MARKS["answer"], "alpha-proj"),
+        )
+        self.assertEqual(self.transport.payloads[1]["group"], "alpha-proj")
+
     def test_legacy_triple_does_not_suppress_named_project(self):
         accepted_path = Path(self.tmpdir.name) / "accepted.json"
         accepted_path.write_text(
@@ -1012,7 +1053,7 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(self.transport.payloads[0]["group"], "Grok")
         self.assertEqual(self.transport.payloads[0]["title"], TITLE_MARKS["answer"])
 
-    def test_nongit_cwd_uses_directory_name(self):
+    def test_nongit_cwd_is_not_used_as_project_name(self):
         workspace = Path(self.tmpdir.name) / "loopx"
         workspace.mkdir()
         with mock.patch("notify_me.deliver.os.getcwd", return_value=str(workspace)):
@@ -1027,10 +1068,8 @@ class DeliverTests(unittest.TestCase):
             )
         self.assertEqual(result["status"], "accepted")
         payload = self.transport.payloads[0]
-        self.assertEqual(payload["group"], "loopx")
-        self.assertEqual(
-            payload["title"], "{} · {}".format(TITLE_MARKS["answer"], "loopx")
-        )
+        self.assertEqual(payload["group"], "Grok")
+        self.assertEqual(payload["title"], TITLE_MARKS["answer"])
 
     def test_git_root_preferred_over_workspace_basename(self):
         repo = Path(self.tmpdir.name) / "demo-proj"
@@ -1116,7 +1155,7 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(self.transport.payloads[0]["group"], "Grok")
         self.assertEqual(self.transport.payloads[0]["title"], TEST_TITLE)
 
-    def test_stale_home_pwd_does_not_hide_git_cwd(self):
+    def test_git_cwd_is_not_used_as_project_name(self):
         repo = Path(self.tmpdir.name) / "demo-proj"
         (repo / ".git").mkdir(parents=True)
         with mock.patch("notify_me.deliver.os.getcwd", return_value=str(repo)):
@@ -1130,7 +1169,7 @@ class DeliverTests(unittest.TestCase):
                 },
                 {"PWD": str(Path.home())},
             )
-        self.assertEqual(result["title"], "{} · {}".format(TITLE_MARKS["answer"], "demo-proj"))
+        self.assertEqual(result["title"], TITLE_MARKS["answer"])
         self.assertEqual(result["body"], "请提供 API token")
 
     def test_titles_and_effects_by_condition(self):
