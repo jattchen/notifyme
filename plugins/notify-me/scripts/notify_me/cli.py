@@ -101,7 +101,11 @@ def main(argv=None):
             else:
                 raise NotifyMeError("invalid_arguments", "agents-rule 只支持 plan 或 commit")
         elif command == "install":
-            result = run_install()
+            options = _options(argv[1:])
+            if options.get("dry_run"):
+                result = {"ok": True, "status": "dry_run"}
+            else:
+                result = run_install()
         else:
             options = _options(argv[1:])
             if command == "setup":
