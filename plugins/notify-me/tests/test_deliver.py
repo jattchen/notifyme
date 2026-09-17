@@ -358,6 +358,37 @@ class DeliverTests(unittest.TestCase):
         self.assertNotEqual(second.get("status"), "accepted")
         self.assertEqual(self.transport.calls, 1)
 
+    def test_mixed_shape_accepted_list_does_not_repost(self):
+        accepted_path = Path(self.tmpdir.name) / "accepted.json"
+        accepted_path.write_text(
+            json.dumps(
+                [
+                    {"not": "a-tuple"},
+                    ["", "wait-token", "missing", "answer"],
+                ]
+            ),
+            encoding="utf-8",
+        )
+        other = Deliverer(
+            binding=Binding(Path(self.tmpdir.name)),
+            transport=self.transport,
+        )
+        try:
+            result = other.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                }
+            )
+        except NotifyMeError as exc:
+            self.assertEqual(exc.code, "invalid_accepted")
+            self.assertEqual(self.transport.calls, 0)
+            return
+        self.assertNotEqual(result.get("status"), "accepted")
+        self.assertEqual(self.transport.calls, 0)
+
     def test_answer_then_done_same_incident_both_accepted(self):
         first = self.deliverer.send(
             {
