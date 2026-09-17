@@ -38,6 +38,15 @@ def _resolver():
         except OSError:
             return False
 
+    def forget(scripts):
+        for name in list(sys.modules):
+            if name == "notify_me" or name.startswith("notify_me."):
+                del sys.modules[name]
+        try:
+            sys.path.remove(str(scripts))
+        except ValueError:
+            pass
+
     matches = []
     registry = installed / "registry.json"
     try:
@@ -74,15 +83,20 @@ def _resolver():
     if not matches:
         return None
     matches.sort()
-    chosen = matches[-1][1]
-    scripts = chosen / "scripts"
-    if str(scripts) not in sys.path:
-        sys.path.insert(0, str(scripts))
-    try:
-        from notify_me.paths import installed_plugin_root
-    except ImportError:
-        return None
-    return installed_plugin_root
+    for _, chosen in reversed(matches):
+        scripts = chosen / "scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        try:
+            from notify_me.paths import installed_plugin_root
+        except ImportError:
+            forget(scripts)
+            continue
+        if installed_plugin_root() is None:
+            forget(scripts)
+            continue
+        return lambda: chosen
+    return None
 
 
 resolve = _resolver()
