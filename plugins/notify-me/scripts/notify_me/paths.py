@@ -29,12 +29,25 @@ def _resolver():
         candidates = []
     for path in candidates:
         scripts = path / "scripts"
-        if (scripts / "notify_me" / "paths.py").is_file():
-            if str(scripts) not in sys.path:
-                sys.path.insert(0, str(scripts))
+        if not (
+            (scripts / "notify_me.py").is_file()
+            and (scripts / "mcp_server.py").is_file()
+            and (scripts / "notify_me" / "paths.py").is_file()
+        ):
+            continue
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        try:
             from notify_me.paths import installed_plugin_root
-
-            return installed_plugin_root
+        except ImportError:
+            sys.modules.pop("notify_me.paths", None)
+            sys.modules.pop("notify_me", None)
+            try:
+                sys.path.remove(str(scripts))
+            except ValueError:
+                pass
+            continue
+        return installed_plugin_root
     return None
 
 
