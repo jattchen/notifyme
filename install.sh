@@ -9,25 +9,9 @@ main() {
     exit 1
   fi
 
-  if grok plugin install jattchen/notifyme#plugins/notify-me --trust; then
-    true
-  else
-    if ! command -v gh >/dev/null 2>&1; then
-      echo "无法安装插件：grok plugin install 失败，且没有 gh。" >&2
-      exit 1
-    fi
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
-    gh repo clone jattchen/notifyme "$tmp/src"
-    grok plugin install "$tmp/src/plugins/notify-me" --trust
-    rm -rf "$tmp"
-    trap - EXIT
-  fi
-
-  grok plugin enable notify-me >/dev/null 2>&1 || true
-
   grok_home="${GROK_HOME:-$HOME/.grok}"
-  if ! plugin="$(python3 - "$grok_home" <<'NOTIFY_ME_RESOLVE_PLUGIN'
+  resolve_plugin() {
+    python3 - "$grok_home" <<'NOTIFY_ME_RESOLVE_PLUGIN'
 import json
 import sys
 from pathlib import Path
@@ -97,10 +81,30 @@ if root is None:
 print(root)
 raise SystemExit(0)
 NOTIFY_ME_RESOLVE_PLUGIN
-)"; then
-    echo "插件安装后未找到 Notify Me（~/.grok/installed-plugins/notify-me-*）。" >&2
-    exit 1
+  }
+
+  if ! plugin="$(resolve_plugin)"; then
+    if grok plugin install jattchen/notifyme#plugins/notify-me --trust; then
+      true
+    else
+      if ! command -v gh >/dev/null 2>&1; then
+        echo "无法安装插件：grok plugin install 失败，且没有 gh。" >&2
+        exit 1
+      fi
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      gh repo clone jattchen/notifyme "$tmp/src"
+      grok plugin install "$tmp/src/plugins/notify-me" --trust
+      rm -rf "$tmp"
+      trap - EXIT
+    fi
+    if ! plugin="$(resolve_plugin)"; then
+      echo "插件安装后未找到 Notify Me（~/.grok/installed-plugins/notify-me-*）。" >&2
+      exit 1
+    fi
   fi
+
+  grok plugin enable notify-me >/dev/null 2>&1 || true
 
   if [[ ! -f "$plugin/scripts/mcp_server.py" || ! -f "$plugin/scripts/notify_me.py" ]]; then
     echo "插件安装后未找到 $plugin/scripts" >&2
