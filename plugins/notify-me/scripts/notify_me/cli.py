@@ -9,7 +9,7 @@ from .binding import Binding
 from .deliver import Deliverer
 from .errors import NotifyMeError
 from .install import run_install
-from .paths import grok_home, state_home
+from .paths import grok_home, state_home, write_stable_entry
 
 
 def _emit(payload, exit_code):
@@ -82,6 +82,10 @@ def _doctor(deliverer):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        write_stable_entry()
+    except OSError:
+        pass
     if not argv:
         return _emit(NotifyMeError("invalid_arguments", "请指定命令").as_dict(), 1)
     command = argv[0]

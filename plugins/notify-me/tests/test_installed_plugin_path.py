@@ -455,6 +455,55 @@ class DocumentedCommandTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotEqual(payload.get("error", {}).get("message"), "leftover")
 
+    def test_plugin_only_install_writes_documented_entry_without_run_install(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            grok = home / ".grok"
+            installed = grok / "installed-plugins"
+            plugin = _make_real_plugin(installed, "notify-me-plugonly")
+            (plugin / "plugin.json").write_text("{}\n", encoding="utf-8")
+
+            entry = notify_me_paths.stable_entry_path(grok)
+            self.assertFalse(
+                entry.is_file(),
+                "plugin-only install has not run write_stable_entry yet",
+            )
+            self.assertEqual(installed_plugin_root(grok), plugin)
+            self.assertTrue(
+                entry.is_file(),
+                "documented ~/.grok/notify-me must exist once a real plugin is found",
+            )
+            self.assertTrue(os.access(entry, os.X_OK))
+
+            skill = (ROOT / "skills" / "notify-me" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            readme = (REPO / "README.md").read_text(encoding="utf-8")
+            match = re.search(r"^python3 (\S+) doctor$", skill, re.M)
+            self.assertIsNotNone(match, "SKILL.md must document a doctor command")
+            command = match.group(0)
+            self.assertNotIn(
+                "notify-me-*",
+                command,
+                "documented doctor must not be an unquoted glob",
+            )
+            self.assertIn(command, skill)
+            self.assertIn(command, readme)
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["GROK_HOME"] = str(grok)
+            env["GROK_NOTIFY_ME_HOME"] = str(home / "state")
+            result = subprocess.run(
+                ["bash", "-lc", command],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(result.stdout or "{}")
+            self.assertTrue(payload.get("ok"), result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_stable_entry_resolves_when_grok_home_uses_tilde(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)

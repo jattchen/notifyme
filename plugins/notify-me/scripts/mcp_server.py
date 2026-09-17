@@ -207,6 +207,12 @@ def serve(deliverer=None, tool_name=None):
 
 if __name__ == "__main__":
     try:
+        from notify_me.paths import write_stable_entry
+
+        write_stable_entry()
+    except OSError:
+        pass
+    try:
         serve(tool_name=advertised_tool_name())
     except KeyboardInterrupt:
         raise SystemExit(0)
