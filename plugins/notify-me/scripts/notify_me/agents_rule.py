@@ -2,6 +2,7 @@ import os
 import re
 import tempfile
 
+from .errors import NotifyMeError
 from .paths import grok_home
 
 
@@ -63,16 +64,40 @@ def plan():
     }
 
 
+def _write_destination(path):
+    if not path.is_symlink():
+        return path
+    try:
+        dest = path.resolve()
+    except OSError as exc:
+        raise NotifyMeError(
+            "agents_symlink_unwritable",
+            "AGENTS.md 是符号链接，但无法解析目标：{}".format(exc),
+        ) from exc
+    if dest.exists() and dest.is_dir():
+        raise NotifyMeError(
+            "agents_symlink_unwritable",
+            "AGENTS.md 是符号链接，不能指向目录",
+        )
+    if not dest.parent.is_dir():
+        raise NotifyMeError(
+            "agents_symlink_unwritable",
+            "AGENTS.md 是符号链接，目标目录不存在",
+        )
+    return dest
+
+
 def commit():
     path = agents_path()
     current = path.read_text(encoding="utf-8") if path.is_file() else ""
     updated, action = _apply(current)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".agents.")
+    dest = _write_destination(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".agents.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(updated)
-        os.replace(tmp, path)
+        os.replace(tmp, dest)
     except Exception:
         try:
             os.unlink(tmp)
