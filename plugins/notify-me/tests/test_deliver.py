@@ -1,4 +1,6 @@
+import fcntl
 import json
+import multiprocessing
 import os
 import stat
 import tempfile
@@ -16,6 +18,72 @@ from notify_me.bark import BarkEndpoint, TransportResult  # noqa: E402
 from notify_me.binding import Binding  # noqa: E402
 from notify_me.deliver import Deliverer, TEST_TITLE, TITLE_MARKS, TOOL_SCHEMA  # noqa: E402
 from notify_me.errors import NotifyMeError  # noqa: E402
+
+
+def _wait_for_path(path, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _count_file_calls(path):
+    with open(path, "a+", encoding="utf-8") as handle:
+        fd = handle.fileno()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            raw = handle.read().strip()
+            count = int(raw or "0") + 1
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(count))
+            handle.flush()
+            return count
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+class _CrossProcessGatedTransport:
+    def __init__(self, calls_path, started_path, release_path):
+        self.calls_path = Path(calls_path)
+        self.started_path = Path(started_path)
+        self.release_path = Path(release_path)
+
+    def send_with_retry(self, endpoint, payload, sleep=None, max_attempts=2):
+        assert payload.get("device_key") == endpoint.key
+        assert payload.get("body")
+        _count_file_calls(self.calls_path)
+        self.started_path.touch()
+        if not _wait_for_path(self.release_path, 5):
+            raise AssertionError("transport gate was not released")
+        return TransportResult(True, False, "accepted", 200, 1)
+
+
+def _cross_process_send_worker(
+    home, workspace, calls_path, started_path, release_path, result_path
+):
+    os.environ["GROK_NOTIFY_ME_HOME"] = home
+    os.environ["GROK_WORKSPACE_ROOT"] = workspace
+    transport = _CrossProcessGatedTransport(calls_path, started_path, release_path)
+    deliverer = Deliverer(binding=Binding(Path(home)), transport=transport)
+    try:
+        result = deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "wait-token",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        Path(result_path).write_text(json.dumps(result), encoding="utf-8")
+    except Exception as exc:
+        Path(result_path).write_text(
+            json.dumps({"error": str(exc), "type": type(exc).__name__}),
+            encoding="utf-8",
+        )
 
 
 class FakeTransport:
@@ -357,6 +425,60 @@ class DeliverTests(unittest.TestCase):
         self.assertFalse(overlap.is_alive())
         self.assertEqual(transport.calls, 1)
         statuses = sorted(result["status"] for result in results)
+        self.assertEqual(statuses, ["accepted", "deduplicated"])
+
+    def test_overlapping_sends_same_key_across_processes_post_once(self):
+        home = self.tmpdir.name
+        workspace = str(Path.home())
+        gate = Path(home) / "cross-process-gate"
+        gate.mkdir()
+        calls_path = gate / "calls"
+        started_path = gate / "started"
+        release_path = gate / "release"
+        first_result = gate / "first.json"
+        second_result = gate / "second.json"
+        ctx = multiprocessing.get_context("fork")
+        first = ctx.Process(
+            target=_cross_process_send_worker,
+            args=(
+                home,
+                workspace,
+                str(calls_path),
+                str(started_path),
+                str(release_path),
+                str(first_result),
+            ),
+        )
+        second = ctx.Process(
+            target=_cross_process_send_worker,
+            args=(
+                home,
+                workspace,
+                str(calls_path),
+                str(started_path),
+                str(release_path),
+                str(second_result),
+            ),
+        )
+        first.start()
+        self.assertTrue(_wait_for_path(started_path, 5))
+        second.start()
+        time.sleep(0.3)
+        release_path.touch()
+        first.join(timeout=5)
+        second.join(timeout=5)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(first.exitcode, 0)
+        self.assertEqual(second.exitcode, 0)
+        results = [
+            json.loads(first_result.read_text(encoding="utf-8")),
+            json.loads(second_result.read_text(encoding="utf-8")),
+        ]
+        self.assertTrue(all("error" not in item for item in results), results)
+        calls = int(calls_path.read_text(encoding="utf-8").strip() or "0")
+        self.assertEqual(calls, 1)
+        statuses = sorted(item["status"] for item in results)
         self.assertEqual(statuses, ["accepted", "deduplicated"])
 
     def test_overlapping_sends_different_keys_do_not_wait_for_http(self):

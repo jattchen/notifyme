@@ -1,5 +1,6 @@
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import stat
@@ -16,6 +17,7 @@ _THREAD_SEND_LOCK = threading.RLock()
 _IN_FLIGHT = set()
 _IN_FLIGHT_COND = threading.Condition(_THREAD_SEND_LOCK)
 ACCEPTED_LOCK_FILENAME = "accepted.lock"
+IN_FLIGHT_PREFIX = ".inflight."
 
 
 def _is_private_regular_file(path):
@@ -89,6 +91,99 @@ class _AcceptedSendLock:
                 pass
         _THREAD_SEND_LOCK.release()
         return False
+
+
+def _in_flight_filename(key):
+    raw = json.dumps(list(key), ensure_ascii=False, separators=(",", ":"))
+    return IN_FLIGHT_PREFIX + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _open_inflight_path(path, create):
+    if path.is_symlink():
+        raise NotifyMeError("insecure_binding", ".inflight 不能是符号链接")
+    flags = os.O_RDWR | os.O_NOFOLLOW
+    if create:
+        flags |= os.O_CREAT
+    try:
+        fd = os.open(str(path), flags, 0o600)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT,) and not create:
+            return None
+        if exc.errno == errno.ELOOP or path.is_symlink():
+            raise NotifyMeError("insecure_binding", ".inflight 不能是符号链接")
+        raise
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise NotifyMeError("insecure_binding", ".inflight 不是普通文件")
+        if create:
+            try:
+                os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    return fd
+
+
+class _InFlightReservation:
+    def __init__(self, home, key):
+        self._path = home / _in_flight_filename(key)
+        self._fd = None
+
+    def try_acquire(self):
+        fd = _open_inflight_path(self._path, create=True)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            if isinstance(exc, BlockingIOError) or exc.errno in (
+                errno.EAGAIN,
+                errno.EACCES,
+                errno.EWOULDBLOCK,
+            ):
+                return False
+            raise
+        self._fd = fd
+        return True
+
+    def wait(self):
+        fd = _open_inflight_path(self._path, create=False)
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def release(self):
+        fd = self._fd
+        self._fd = None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            self._path.unlink()
+        except OSError:
+            pass
 
 
 TOOL_NAME = "notify_me"
@@ -464,6 +559,7 @@ class Deliverer:
         effect = EFFECTS[condition]
         group = project or "Grok"
         reserved = False
+        reservation = _InFlightReservation(self.binding.home, key)
         try:
             while True:
                 with _AcceptedSendLock(self.binding.home):
@@ -490,14 +586,17 @@ class Deliverer:
                             "title": title,
                             "body": body,
                         }
-                    if key not in _IN_FLIGHT:
+                    if key not in _IN_FLIGHT and reservation.try_acquire():
                         _IN_FLIGHT.add(key)
                         reserved = True
                 if reserved:
                     break
-                with _IN_FLIGHT_COND:
-                    if key in _IN_FLIGHT:
-                        _IN_FLIGHT_COND.wait()
+                if key in _IN_FLIGHT:
+                    with _IN_FLIGHT_COND:
+                        if key in _IN_FLIGHT:
+                            _IN_FLIGHT_COND.wait()
+                else:
+                    reservation.wait()
             endpoint = self.binding.load()
             payload = _build_payload(endpoint, title, body, effect, group=group)
             result = self.transport.send_with_retry(endpoint, payload)
@@ -533,6 +632,7 @@ class Deliverer:
                 with _IN_FLIGHT_COND:
                     _IN_FLIGHT.discard(key)
                     _IN_FLIGHT_COND.notify_all()
+                reservation.release()
 
     def test(self, params, env=None):
         dry_run = _dry_run(params)
