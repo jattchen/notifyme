@@ -1183,6 +1183,22 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(self.transport.calls, 0)
         self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o777)
 
+    def test_send_without_state_dir_is_activation_required(self):
+        missing = Path(self.tmpdir.name) / "never-setup"
+        unbound = Deliverer(binding=Binding(missing), transport=self.transport)
+        with self.assertRaises(NotifyMeError) as caught:
+            unbound.send(
+                {
+                    "condition": "answer",
+                    "item_id": "wait-token",
+                    "state": "missing",
+                    "message": "请提供 API token",
+                }
+            )
+        self.assertEqual(caught.exception.code, "activation_required")
+        self.assertEqual(self.transport.calls, 0)
+        self.assertFalse(missing.exists())
+
     def test_planted_accepted_leftover_does_not_suppress_send(self):
         leftover = Path(self.tmpdir.name) / ".accepted.planted"
         leftover.write_text(
