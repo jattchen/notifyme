@@ -69,7 +69,17 @@ def _ensure_plugin():
     source = plugin_root()
     already_installed = _is_installed_hash_dir(source)
     if (source / "plugin.json").is_file() and not already_installed:
-        _run(["grok", "plugin", "install", str(source), "--trust"], check=False)
+        local = _run(
+            ["grok", "plugin", "install", str(source), "--trust"],
+            check=False,
+        )
+        if local.returncode != 0:
+            detail = (local.stderr or local.stdout or "").strip()
+            raise NotifyMeError(
+                "plugin_install_failed",
+                "无法从本地源码目录安装插件。",
+                detail=detail[-500:] if detail else "",
+            )
     dest = installed_plugin_root()
     if dest is None and not already_installed:
         remote = _run(
