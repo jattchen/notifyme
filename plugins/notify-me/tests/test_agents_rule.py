@@ -171,6 +171,35 @@ class CliTests(unittest.TestCase):
         payload = json.loads(buf.getvalue())
         self.assertEqual(payload["error"]["code"], "tty_required")
 
+    def test_install_dry_run_does_not_install(self):
+        from io import StringIO
+        from unittest import mock
+
+        buf = StringIO()
+        with mock.patch("notify_me.cli.run_install") as run_install, mock.patch(
+            "sys.stdout", buf
+        ):
+            code = main(["install", "--dry-run"])
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "dry_run")
+        run_install.assert_not_called()
+
+    def test_install_misspelled_dry_run_does_not_install(self):
+        from io import StringIO
+        from unittest import mock
+
+        buf = StringIO()
+        with mock.patch("notify_me.cli.run_install") as run_install, mock.patch(
+            "sys.stdout", buf
+        ):
+            code = main(["install", "--dry-ru"])
+        payload = json.loads(buf.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertEqual(payload["error"]["code"], "invalid_arguments")
+        run_install.assert_not_called()
+
     def test_setup_without_tty_refuses(self):
         from io import StringIO
         from unittest import mock
