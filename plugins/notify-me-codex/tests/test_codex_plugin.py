@@ -13,7 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from notify_me.agents_rule import MANAGED_START, MANAGED_END, has_managed_block  # noqa: E402
 from notify_me.binding import Binding  # noqa: E402
-from notify_me.deliver import Deliverer, TOOL_SCHEMA  # noqa: E402
+from notify_me.deliver import DEFAULT_BARK_ICON_URL, Deliverer, TOOL_SCHEMA  # noqa: E402
 
 
 class CodexPackageTests(unittest.TestCase):
@@ -80,6 +80,15 @@ class CodexPackageTests(unittest.TestCase):
                 self.assertIn("不得传 op", agents_rule.managed_block())
         finally:
             agents_rule.agents_path = original
+
+    def test_bark_uses_official_codex_icon(self):
+        self.assertTrue(
+            DEFAULT_BARK_ICON_URL.endswith(
+                "/plugins/notify-me-codex/assets/codex-icon.png"
+            )
+        )
+        self.assertTrue(DEFAULT_BARK_ICON_URL.startswith("https://"))
+        self.assertTrue((PLUGIN_ROOT / "assets" / "codex-icon.png").is_file())
 
     def test_dry_run_keeps_workspace_identity_without_network(self):
         with tempfile.TemporaryDirectory() as raw:

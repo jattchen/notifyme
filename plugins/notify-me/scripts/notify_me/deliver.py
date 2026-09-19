@@ -214,7 +214,7 @@ EFFECTS = {
     "test": QUIET_EFFECT,
 }
 DEFAULT_BARK_ICON_URL = (
-    "https://cdn.jsdelivr.net/gh/jattchen/grok-build-bark-icon@main/grok-build-icon.png"
+    "https://cdn.jsdelivr.net/gh/jattchen/notifyme@main/plugins/notify-me/assets/grok-icon.png"
 )
 ACCEPTED_FILENAME = "accepted.json"
 _SKIP_ACCEPTED = object()

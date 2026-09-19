@@ -16,7 +16,13 @@ sys.path.insert(0, str(ROOT))
 
 from notify_me.bark import BarkEndpoint, TransportResult  # noqa: E402
 from notify_me.binding import Binding  # noqa: E402
-from notify_me.deliver import Deliverer, TEST_TITLE, TITLE_MARKS, TOOL_SCHEMA  # noqa: E402
+from notify_me.deliver import (  # noqa: E402
+    DEFAULT_BARK_ICON_URL,
+    Deliverer,
+    TEST_TITLE,
+    TITLE_MARKS,
+    TOOL_SCHEMA,
+)
 from notify_me.errors import NotifyMeError  # noqa: E402
 
 
@@ -148,6 +154,9 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(self.transport.payloads[0]["title"], TITLE_MARKS["answer"])
         self.assertEqual(self.transport.payloads[0]["body"], "请提供 API token")
         self.assertEqual(self.transport.payloads[0]["level"], "timeSensitive")
+        self.assertEqual(self.transport.payloads[0]["icon"], DEFAULT_BARK_ICON_URL)
+        self.assertTrue(DEFAULT_BARK_ICON_URL.endswith("/plugins/notify-me/assets/grok-icon.png"))
+        self.assertTrue((ROOT.parent / "assets" / "grok-icon.png").is_file())
         self.assertNotIn("device_key", first)
         dumped = json.dumps(first)
         self.assertNotIn("Abcdefgh1234", dumped)
