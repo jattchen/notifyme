@@ -38,6 +38,7 @@ python3 <notify-me-codex-plugin-root>/scripts/notify_me.py test
 - `state`: 当前语义状态的稳定标识
 - `message`: 简短、面向用户、使用用户语言的正文
 - `workspace`: 当前项目根目录的绝对路径
+- `url`: 可选。用户点推送时打开的 http/https 网页，不是 Bark 设备地址。第一次发送就要带上。
 
 只有当前顶层主 Agent 可以发送。子 Agent、委派 Agent 和普通进度不发送；中间步骤不能使用 `done`。只有 `ok=true` 且 `status=accepted` 才能说 Bark 服务已接受通知；`deduplicated`、`failed` 或错误结果都不能声称已发送。
 
@@ -49,4 +50,4 @@ python3 <notify-me-codex-plugin-root>/scripts/notify_me.py test
 - `severe-risk`: 继续可能造成灾难性或大范围不可逆后果。
 - `done`: 用户这一次要求的整件事已经完成。
 
-同一事件重试时保持完全相同的 `item_id`、`state`、`condition` 和 `workspace`。不要传入 Bark URL、任务全文、内部日志或密钥。
+同一事件重试时保持完全相同的 `item_id`、`state`、`condition` 和 `workspace`。不要传入 Bark 设备地址、任务全文、内部日志或密钥。

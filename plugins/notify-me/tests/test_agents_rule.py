@@ -53,6 +53,8 @@ class AgentsRuleTests(unittest.TestCase):
         self.assertIn("condition=answer", result["block"])
         self.assertIn("condition=done", result["block"])
         self.assertIn("等用户去操作", result["block"])
+        self.assertIn("有可点开的网页时传 url", result["block"])
+        self.assertIn("不是 Bark 设备地址", result["block"])
         self.assertNotIn("SKILL.md", result["block"])
         self.assertNotIn("要去外部操作", result["block"])
         self.assertNotIn("终端或浏览器", result["block"])
