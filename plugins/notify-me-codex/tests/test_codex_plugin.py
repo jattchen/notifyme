@@ -39,7 +39,7 @@ class CodexPackageTests(unittest.TestCase):
         schema = TOOL_SCHEMA["inputSchema"]
         self.assertEqual(
             set(schema["properties"]),
-            {"condition", "item_id", "state", "message", "dry_run", "workspace"},
+            {"condition", "item_id", "state", "message", "dry_run", "workspace", "url"},
         )
         self.assertNotIn("op", schema["properties"])
         self.assertEqual(
@@ -146,6 +146,68 @@ class CodexPackageTests(unittest.TestCase):
             self.assertEqual(result["status"], "dry_run")
             self.assertIn(workspace.name, result["title"])
             self.assertFalse((state / "accepted.json").exists())
+
+    def test_send_includes_click_url_in_bark_payload(self):
+        from notify_me.errors import NotifyMeError
+
+        class FakeTransport:
+            def __init__(self):
+                self.payloads = []
+                self.calls = 0
+
+            def send_with_retry(self, endpoint, payload, sleep=None, max_attempts=2):
+                self.calls += 1
+                self.payloads.append(
+                    {key: value for key, value in payload.items() if key != "device_key"}
+                )
+                return TransportResult(True, False, "accepted", 200, 1)
+
+        click = "https://github.com/jattchen/notifyme/issues/185"
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            workspace = Path(raw) / "workspace"
+            workspace.mkdir()
+            binding = Binding(state)
+            binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
+            transport = FakeTransport()
+            deliverer = Deliverer(binding=binding, transport=transport)
+            sent = deliverer.send(
+                {
+                    "condition": "action",
+                    "item_id": "bug-185",
+                    "state": "open",
+                    "message": "点开这条推送查看 issue",
+                    "workspace": str(workspace),
+                    "url": click,
+                }
+            )
+            self.assertEqual(sent["status"], "accepted")
+            self.assertEqual(transport.payloads[0]["url"], click)
+            preview = deliverer.send(
+                {
+                    "condition": "action",
+                    "item_id": "bug-preview",
+                    "state": "open",
+                    "message": "预览",
+                    "workspace": str(workspace),
+                    "url": click,
+                    "dry_run": True,
+                }
+            )
+            self.assertEqual(preview["status"], "dry_run")
+            self.assertEqual(preview["url"], click)
+            with self.assertRaises(NotifyMeError) as raised:
+                deliverer.send(
+                    {
+                        "condition": "action",
+                        "item_id": "bad-url",
+                        "state": "open",
+                        "message": "请查看",
+                        "workspace": str(workspace),
+                        "url": "https://api.day.app/Abcdefgh1234",
+                    }
+                )
+            self.assertEqual(raised.exception.code, "invalid_arguments")
 
     def test_send_rejects_missing_workspace(self):
         from notify_me.errors import NotifyMeError

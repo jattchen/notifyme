@@ -6,13 +6,14 @@ from .errors import NotifyMeError
 from .paths import grok_home
 
 
-MANAGED_VERSION = "8"
+MANAGED_VERSION = "9"
 MANAGED_START = "<!-- notify-me:managed:start version={} -->".format(MANAGED_VERSION)
 MANAGED_END = "<!-- notify-me:managed:end -->"
 MANAGED_BODY = (
     "仅主 Agent 直接调 MCP 工具 notifyme__notifyme（不是 Skill）；"
     "没有该工具时用 notify_me__notify_me："
     "调用时带上当前项目根路径 workspace；"
+    "有可点开的网页时传 url（http/https，不是 Bark 设备地址）；"
     "等用户且主线停住 → 缺信息/选择 condition=answer；"
     "等用户授权 condition=auth；等用户去操作 condition=action。"
     "继续可能灾难性或大范围不可逆 → condition=severe-risk。"

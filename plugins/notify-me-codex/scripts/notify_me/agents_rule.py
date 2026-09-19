@@ -7,7 +7,7 @@ import tempfile
 from .paths import agents_path
 
 
-MANAGED_VERSION = "2"
+MANAGED_VERSION = "3"
 MANAGED_START = "<!-- notify-me-codex:managed:start version={} -->".format(
     MANAGED_VERSION
 )
@@ -16,6 +16,7 @@ MANAGED_BODY = (
     "仅当前顶层主 Agent 直接调用 MCP 工具 "
     "mcp__notifyme_codex__notifyme（不是 Skill）；"
     "调用时必须传入扁平参数 condition、item_id、state、message、workspace；"
+    "有可点开的网页时另传 url（http/https，不是 Bark 设备地址）；"
     "workspace 必须是当前项目根路径的绝对路径；"
     "调用格式固定为 {\"condition\":\"...\",\"item_id\":\"...\","
     "\"state\":\"...\",\"message\":\"...\","

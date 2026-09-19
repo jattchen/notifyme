@@ -128,7 +128,7 @@ class DeliverTests(unittest.TestCase):
         props = TOOL_SCHEMA["inputSchema"]["properties"]
         self.assertEqual(
             set(props),
-            {"op", "condition", "item_id", "state", "message", "dry_run", "workspace"},
+            {"op", "condition", "item_id", "state", "message", "dry_run", "workspace", "url"},
         )
         self.assertEqual(TOOL_SCHEMA["inputSchema"]["properties"]["op"]["enum"], ["send", "test"])
         self.assertEqual(
@@ -140,6 +140,84 @@ class DeliverTests(unittest.TestCase):
         self.assertNotIn("subscribe", dumped)
         self.assertNotIn('"title"', dumped)
         self.assertNotIn("priority", dumped)
+
+    def test_send_includes_click_url_in_bark_payload(self):
+        click = "https://github.com/jattchen/notifyme/issues/185"
+        first = self.deliverer.send(
+            {
+                "condition": "action",
+                "item_id": "bug-185",
+                "state": "open",
+                "message": "点开这条推送查看 issue",
+                "url": click,
+            }
+        )
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(self.transport.payloads[0]["url"], click)
+        self.assertNotIn("device_key", first)
+        second = self.deliverer.send(
+            {
+                "condition": "action",
+                "item_id": "bug-185",
+                "state": "open",
+                "message": "点开这条推送查看 issue",
+                "url": "https://github.com/jattchen/notifyme/issues/999",
+            }
+        )
+        self.assertEqual(second["status"], "deduplicated")
+        self.assertEqual(self.transport.calls, 1)
+
+    def test_send_omits_url_when_absent(self):
+        self.deliverer.send(
+            {
+                "condition": "answer",
+                "item_id": "no-link",
+                "state": "missing",
+                "message": "请提供 API token",
+            }
+        )
+        self.assertNotIn("url", self.transport.payloads[0])
+
+    def test_send_rejects_bark_device_and_non_http_urls(self):
+        base = {
+            "condition": "action",
+            "item_id": "bad-url",
+            "state": "open",
+            "message": "请查看",
+        }
+        cases = (
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "https://api.day.app/Abcdefgh1234",
+            "https://example.com/Abcdefgh1234",
+            "not-a-url",
+            "https://example.com/has space",
+        )
+        for value in cases:
+            with self.subTest(url=value):
+                with self.assertRaises(NotifyMeError) as raised:
+                    self.deliverer.send(dict(base, url=value))
+                self.assertEqual(raised.exception.code, "invalid_arguments")
+        self.assertEqual(self.transport.calls, 0)
+
+    def test_dry_run_and_test_echo_click_url(self):
+        click = "https://github.com/jattchen/notifyme/issues/185"
+        preview = self.deliverer.send(
+            {
+                "condition": "action",
+                "item_id": "bug-185",
+                "state": "open",
+                "message": "点开这条推送查看 issue",
+                "url": click,
+                "dry_run": True,
+            }
+        )
+        self.assertEqual(preview["status"], "dry_run")
+        self.assertEqual(preview["url"], click)
+        self.assertEqual(self.transport.calls, 0)
+        tested = self.deliverer.test({"url": click, "dry_run": True})
+        self.assertEqual(tested["status"], "dry_run")
+        self.assertEqual(tested["url"], click)
 
     def test_send_answer_accepted_then_deduplicated(self):
         first = self.deliverer.send(

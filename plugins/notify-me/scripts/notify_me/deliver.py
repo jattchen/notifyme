@@ -6,6 +6,7 @@ import os
 import stat
 import tempfile
 import threading
+import urllib.parse
 from pathlib import Path
 
 from .bark import BarkTransport
@@ -191,7 +192,8 @@ CURRENT_TOOL_NAME = "notifyme"
 TOOL_NAMES = (TOOL_NAME, CURRENT_TOOL_NAME)
 TOOL_DESCRIPTION = (
     "Main agent: send answer|auth|action|severe-risk|done; test verifies Bark. "
-    "Never pass Bark URLs."
+    "Optional url is the http(s) page opened when the notification is tapped. "
+    "Never pass Bark device URLs."
 )
 OPS = ("send", "test")
 SENDABLE = ("answer", "auth", "action", "severe-risk", "done")
@@ -304,6 +306,15 @@ TOOL_SCHEMA = {
                     "item stay distinct."
                 ),
             },
+            "url": {
+                "type": "string",
+                "description": (
+                    "Optional http(s) page opened when the user taps the "
+                    "notification. Not the Bark device endpoint. Include it "
+                    "on the first send; a later retry with a different url "
+                    "is deduplicated."
+                ),
+            },
         },
         "required": ["op"],
         "additionalProperties": False,
@@ -331,6 +342,45 @@ def _dry_run(params):
         if normalized == "true":
             return True
     raise NotifyMeError("invalid_arguments", "dry_run 必须是布尔值")
+
+
+_MAX_CLICK_URL = 2048
+_CLICK_URL_SCHEMES = ("http", "https")
+_BARK_API_HOSTS = frozenset({"api.day.app"})
+
+
+def _optional_click_url(params, endpoint=None):
+    if not isinstance(params, dict) or "url" not in params:
+        return None
+    value = params.get("url")
+    if not isinstance(value, str):
+        raise NotifyMeError("invalid_arguments", "url 必须是 http 或 https 地址")
+    raw = value.strip()
+    if not raw:
+        raise NotifyMeError("invalid_arguments", "url 必须是 http 或 https 地址")
+    if len(raw) > _MAX_CLICK_URL:
+        raise NotifyMeError("invalid_arguments", "url 过长")
+    if any(char.isspace() for char in raw):
+        raise NotifyMeError("invalid_arguments", "url 不能包含空白字符")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = parsed.hostname
+    except ValueError:
+        raise NotifyMeError("invalid_arguments", "url 格式无效")
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _CLICK_URL_SCHEMES:
+        raise NotifyMeError("invalid_arguments", "url 只支持 http 或 https")
+    if parsed.username is not None or parsed.password is not None:
+        raise NotifyMeError("invalid_arguments", "url 不能包含用户信息")
+    if not host:
+        raise NotifyMeError("invalid_arguments", "url 缺少主机")
+    host = host.lower().rstrip(".")
+    segments = [segment for segment in (parsed.path or "").split("/") if segment]
+    if host in _BARK_API_HOSTS:
+        raise NotifyMeError("invalid_arguments", "url 不能是 Bark 设备地址")
+    if endpoint is not None and endpoint.key in segments:
+        raise NotifyMeError("invalid_arguments", "url 不能是 Bark 设备地址")
+    return raw
 
 
 def _resolved_path(start):
@@ -426,7 +476,7 @@ def _group_from_workspace(workspace, default=DEFAULT_GROUP):
     return Path(workspace).name or default
 
 
-def _build_payload(endpoint, title, body, effect, group=DEFAULT_GROUP):
+def _build_payload(endpoint, title, body, effect, group=DEFAULT_GROUP, url=None):
     payload = {
         "device_key": endpoint.key,
         "title": title,
@@ -440,6 +490,8 @@ def _build_payload(endpoint, title, body, effect, group=DEFAULT_GROUP):
         payload["sound"] = effect["sound"]
     if effect.get("volume") is not None:
         payload["volume"] = str(effect["volume"])
+    if url:
+        payload["url"] = url
     return payload
 
 
@@ -579,6 +631,7 @@ class Deliverer:
         group = project or "Grok"
         reserved = False
         endpoint = None if dry_run else self.binding.load()
+        click_url = _optional_click_url(params, endpoint)
         reservation = _InFlightReservation(self.binding.home, key)
         try:
             while True:
@@ -597,7 +650,7 @@ class Deliverer:
                             "accepted.json 无法作为记录列表读取",
                         )
                     if dry_run:
-                        return {
+                        result = {
                             "ok": True,
                             "status": "dry_run",
                             "condition": condition,
@@ -606,6 +659,9 @@ class Deliverer:
                             "title": title,
                             "body": body,
                         }
+                        if click_url is not None:
+                            result["url"] = click_url
+                        return result
                     if key not in _IN_FLIGHT and reservation.try_acquire():
                         _IN_FLIGHT.add(key)
                         reserved = True
@@ -617,7 +673,9 @@ class Deliverer:
                             _IN_FLIGHT_COND.wait()
                 else:
                     reservation.wait()
-            payload = _build_payload(endpoint, title, body, effect, group=group)
+            payload = _build_payload(
+                endpoint, title, body, effect, group=group, url=click_url
+            )
             result = self.transport.send_with_retry(endpoint, payload)
             if result.accepted:
                 persisted = False
@@ -719,16 +777,22 @@ class Deliverer:
         group = _payload_group(params)
         title = TEST_TITLE
         effect = EFFECTS["test"]
+        endpoint = None if dry_run else self.binding.load()
+        click_url = _optional_click_url(params, endpoint)
         if dry_run:
-            return {
+            result = {
                 "ok": True,
                 "status": "dry_run",
                 "title": title,
                 "body": message,
                 "group": group,
             }
-        endpoint = self.binding.load()
-        payload = _build_payload(endpoint, title, message, effect, group=group)
+            if click_url is not None:
+                result["url"] = click_url
+            return result
+        payload = _build_payload(
+            endpoint, title, message, effect, group=group, url=click_url
+        )
         result = self.transport.send_with_retry(endpoint, payload)
         if result.accepted:
             return {"ok": True, "status": "accepted", "attempts": result.attempts}
