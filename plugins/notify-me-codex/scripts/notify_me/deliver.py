@@ -214,8 +214,9 @@ EFFECTS = {
     "done": QUIET_EFFECT,
     "test": QUIET_EFFECT,
 }
+DEFAULT_GROUP = "Codex"
 DEFAULT_BARK_ICON_URL = (
-    "https://cdn.jsdelivr.net/gh/jattchen/notifyme@main/plugins/notify-me-codex/assets/codex-icon.png"
+    "https://cdn.jsdelivr.net/gh/jattchen/notifyme@main/plugins/notify-me-codex/assets/codex-icon.png?v=2"
 )
 ACCEPTED_FILENAME = "accepted.json"
 _SKIP_ACCEPTED = object()
@@ -404,7 +405,25 @@ def _compose_title(condition, project=None):
     return mark
 
 
-def _build_payload(endpoint, title, body, effect, group="Codex"):
+def _payload_group(params, default=DEFAULT_GROUP):
+    group = (params or {}).get("group")
+    if group is None:
+        return default
+    if not isinstance(group, str):
+        raise NotifyMeError("invalid_arguments", "group 必须是字符串")
+    group = group.strip()
+    if not group:
+        return default
+    return group
+
+
+def _group_from_workspace(workspace, default=DEFAULT_GROUP):
+    if not workspace:
+        return default
+    return Path(workspace).name or default
+
+
+def _build_payload(endpoint, title, body, effect, group=DEFAULT_GROUP):
     payload = {
         "device_key": endpoint.key,
         "title": title,
@@ -649,6 +668,60 @@ class Deliverer:
                     _IN_FLIGHT_COND.notify_all()
                 reservation.release()
 
+    def known_groups(self):
+        names = []
+        seen = set()
+
+        def add(name):
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+
+        add(DEFAULT_GROUP)
+        keys, _corrupt = self._load_accepted()
+        for key in keys:
+            add(_group_from_workspace(key[0]))
+        return names
+
+    def refresh_icons(self, params, env=None):
+        params = params or {}
+        dry_run = _dry_run(params)
+        message = params.get("message")
+        if message is None or (isinstance(message, str) and not message.strip()):
+            message = "这个分组已换成官方图标"
+        elif not isinstance(message, str):
+            raise NotifyMeError("invalid_arguments", "message 必须是字符串")
+        else:
+            message = message.strip()
+        groups = self.known_groups()
+        if dry_run:
+            return {
+                "ok": True,
+                "status": "dry_run",
+                "groups": groups,
+                "body": message,
+            }
+        results = []
+        for group in groups:
+            result = self.test({"message": message, "group": group})
+            entry = {
+                "group": group,
+                "ok": bool(result.get("ok")),
+                "status": result.get("status"),
+            }
+            results.append(entry)
+            if not result.get("ok"):
+                failed = {
+                    "ok": False,
+                    "status": "failed",
+                    "groups": results,
+                }
+                for field in ("category", "http_status", "attempts"):
+                    if field in result:
+                        failed[field] = result[field]
+                return failed
+        return {"ok": True, "status": "accepted", "groups": results}
+
     def test(self, params, env=None):
         dry_run = _dry_run(params)
         message = (params or {}).get("message")
@@ -658,6 +731,7 @@ class Deliverer:
             raise NotifyMeError("invalid_arguments", "message 必须是字符串")
         else:
             message = message.strip()
+        group = _payload_group(params)
         title = TEST_TITLE
         effect = EFFECTS["test"]
         if dry_run:
@@ -666,9 +740,10 @@ class Deliverer:
                 "status": "dry_run",
                 "title": title,
                 "body": message,
+                "group": group,
             }
         endpoint = self.binding.load()
-        payload = _build_payload(endpoint, title, message, effect)
+        payload = _build_payload(endpoint, title, message, effect, group=group)
         result = self.transport.send_with_retry(endpoint, payload)
         if result.accepted:
             return {"ok": True, "status": "accepted", "attempts": result.attempts}

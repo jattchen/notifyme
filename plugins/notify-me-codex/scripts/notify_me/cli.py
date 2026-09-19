@@ -20,7 +20,7 @@ def _emit(payload, exit_code):
 
 
 _FLAG_OPTIONS = {"dry-run"}
-_VALUE_OPTIONS = {"message"}
+_VALUE_OPTIONS = {"message", "group"}
 
 
 def _options(tokens):
@@ -156,7 +156,10 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         return _emit(
-            NotifyMeError("invalid_arguments", "请指定 setup、doctor 或 agents-rule 命令").as_dict(),
+            NotifyMeError(
+                "invalid_arguments",
+                "请指定 setup、test、refresh-icons、doctor 或 agents-rule 命令",
+            ).as_dict(),
             1,
         )
     command = argv[0]
@@ -177,6 +180,8 @@ def main(argv=None):
             result = _setup(_options(argv[1:]))
         elif command == "test":
             result = deliverer.test(_options(argv[1:]))
+        elif command == "refresh-icons":
+            result = deliverer.refresh_icons(_options(argv[1:]))
         elif command == "doctor":
             result = _doctor(deliverer)
         else:
