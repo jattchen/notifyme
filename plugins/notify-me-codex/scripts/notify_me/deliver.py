@@ -215,7 +215,7 @@ EFFECTS = {
     "test": QUIET_EFFECT,
 }
 DEFAULT_BARK_ICON_URL = (
-    "https://bark.day.app/favicon.ico"
+    "https://cdn.jsdelivr.net/gh/jattchen/notifyme@main/plugins/notify-me-codex/assets/codex-icon.png"
 )
 ACCEPTED_FILENAME = "accepted.json"
 _SKIP_ACCEPTED = object()
