@@ -24,7 +24,7 @@ def _emit(payload, exit_code):
 
 
 _FLAG_OPTIONS = {"dry-run"}
-_VALUE_OPTIONS = {"message"}
+_VALUE_OPTIONS = {"message", "group"}
 
 
 def _options(tokens):
@@ -173,7 +173,11 @@ def main(argv=None):
                 params = {"op": "test", "dry_run": bool(options.get("dry_run"))}
                 if "message" in options:
                     params["message"] = options["message"]
+                if "group" in options:
+                    params["group"] = options["group"]
                 result = deliverer.dispatch(params)
+            elif command == "refresh-icons":
+                result = deliverer.refresh_icons(options)
             else:
                 raise NotifyMeError("unsupported_command", "不支持的命令")
         return _emit(result, 0 if result.get("ok") else 1)

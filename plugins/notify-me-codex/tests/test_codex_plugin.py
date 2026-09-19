@@ -13,7 +13,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 from notify_me.agents_rule import MANAGED_START, MANAGED_END, has_managed_block  # noqa: E402
 from notify_me.binding import Binding  # noqa: E402
-from notify_me.deliver import DEFAULT_BARK_ICON_URL, Deliverer, TOOL_SCHEMA  # noqa: E402
+from notify_me.bark import BarkEndpoint, TransportResult  # noqa: E402
+from notify_me.deliver import DEFAULT_BARK_ICON_URL, DEFAULT_GROUP, Deliverer, TOOL_SCHEMA  # noqa: E402
 
 
 class CodexPackageTests(unittest.TestCase):
@@ -82,13 +83,50 @@ class CodexPackageTests(unittest.TestCase):
             agents_rule.agents_path = original
 
     def test_bark_uses_official_codex_icon(self):
-        self.assertTrue(
-            DEFAULT_BARK_ICON_URL.endswith(
-                "/plugins/notify-me-codex/assets/codex-icon.png"
-            )
+        self.assertIn(
+            "/plugins/notify-me-codex/assets/codex-icon.png",
+            DEFAULT_BARK_ICON_URL,
         )
+        self.assertIn("v=2", DEFAULT_BARK_ICON_URL)
         self.assertTrue(DEFAULT_BARK_ICON_URL.startswith("https://"))
         self.assertTrue((PLUGIN_ROOT / "assets" / "codex-icon.png").is_file())
+
+    def test_refresh_icons_posts_new_icon_to_known_groups(self):
+        class FakeTransport:
+            def __init__(self):
+                self.payloads = []
+
+            def send_with_retry(self, endpoint, payload, sleep=None, max_attempts=2):
+                self.payloads.append(
+                    {key: value for key, value in payload.items() if key != "device_key"}
+                )
+                return TransportResult(True, False, "accepted", 200, 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            workspace = Path(raw) / "wg-easy-mac"
+            workspace.mkdir()
+            binding = Binding(state)
+            binding.save(BarkEndpoint.parse("https://api.day.app/Abcdefgh1234"))
+            transport = FakeTransport()
+            deliverer = Deliverer(binding=binding, transport=transport)
+            sent = deliverer.send(
+                {
+                    "condition": "done",
+                    "item_id": "task-1",
+                    "state": "finished",
+                    "message": "已完成",
+                    "workspace": str(workspace),
+                }
+            )
+            self.assertEqual(sent["status"], "accepted")
+            preview = deliverer.refresh_icons({"dry_run": True})
+            self.assertEqual(preview["groups"], [DEFAULT_GROUP, "wg-easy-mac"])
+            refreshed = deliverer.refresh_icons({})
+            self.assertEqual(refreshed["status"], "accepted")
+            self.assertEqual(transport.payloads[1]["group"], DEFAULT_GROUP)
+            self.assertEqual(transport.payloads[2]["group"], "wg-easy-mac")
+            self.assertEqual(transport.payloads[2]["icon"], DEFAULT_BARK_ICON_URL)
 
     def test_dry_run_keeps_workspace_identity_without_network(self):
         with tempfile.TemporaryDirectory() as raw:

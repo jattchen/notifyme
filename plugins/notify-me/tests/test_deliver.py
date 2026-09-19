@@ -18,6 +18,7 @@ from notify_me.bark import BarkEndpoint, TransportResult  # noqa: E402
 from notify_me.binding import Binding  # noqa: E402
 from notify_me.deliver import (  # noqa: E402
     DEFAULT_BARK_ICON_URL,
+    DEFAULT_GROUP,
     Deliverer,
     TEST_TITLE,
     TITLE_MARKS,
@@ -155,7 +156,8 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(self.transport.payloads[0]["body"], "请提供 API token")
         self.assertEqual(self.transport.payloads[0]["level"], "timeSensitive")
         self.assertEqual(self.transport.payloads[0]["icon"], DEFAULT_BARK_ICON_URL)
-        self.assertTrue(DEFAULT_BARK_ICON_URL.endswith("/plugins/notify-me/assets/grok-icon.png"))
+        self.assertIn("/plugins/notify-me/assets/grok-icon.png", DEFAULT_BARK_ICON_URL)
+        self.assertIn("v=2", DEFAULT_BARK_ICON_URL)
         self.assertTrue((ROOT.parent / "assets" / "grok-icon.png").is_file())
         self.assertNotIn("device_key", first)
         dumped = json.dumps(first)
@@ -1205,6 +1207,42 @@ class DeliverTests(unittest.TestCase):
         self.assertEqual(result["status"], "accepted")
         self.assertEqual(self.transport.payloads[0]["group"], "Grok")
         self.assertEqual(self.transport.payloads[0]["title"], TEST_TITLE)
+
+    def test_test_can_target_existing_group(self):
+        result = self.deliverer.test({"message": "刷新图标", "group": "notifyme"})
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(self.transport.payloads[0]["group"], "notifyme")
+        self.assertEqual(self.transport.payloads[0]["icon"], DEFAULT_BARK_ICON_URL)
+        self.assertEqual(self.transport.payloads[0]["title"], TEST_TITLE)
+
+    def test_refresh_icons_posts_new_icon_to_known_groups(self):
+        repo = Path(self.tmpdir.name) / "staycast"
+        (repo / ".git").mkdir(parents=True)
+        sent = self.deliverer.send(
+            {
+                "condition": "done",
+                "item_id": "task-1",
+                "state": "finished",
+                "message": "已完成",
+                "workspace": str(repo),
+            }
+        )
+        self.assertEqual(sent["status"], "accepted")
+        preview = self.deliverer.refresh_icons({"dry_run": True})
+        self.assertEqual(preview["status"], "dry_run")
+        self.assertEqual(preview["groups"], [DEFAULT_GROUP, "staycast"])
+        refreshed = self.deliverer.refresh_icons({"message": "这个分组已换成官方图标"})
+        self.assertEqual(refreshed["status"], "accepted")
+        self.assertEqual(
+            [item["group"] for item in refreshed["groups"]],
+            [DEFAULT_GROUP, "staycast"],
+        )
+        self.assertTrue(all(item["ok"] for item in refreshed["groups"]))
+        self.assertEqual(self.transport.payloads[1]["group"], DEFAULT_GROUP)
+        self.assertEqual(self.transport.payloads[2]["group"], "staycast")
+        self.assertEqual(self.transport.payloads[1]["icon"], DEFAULT_BARK_ICON_URL)
+        self.assertEqual(self.transport.payloads[2]["icon"], DEFAULT_BARK_ICON_URL)
+        self.assertEqual(self.transport.payloads[2]["body"], "这个分组已换成官方图标")
 
     def test_git_cwd_is_not_used_as_project_name(self):
         repo = Path(self.tmpdir.name) / "demo-proj"
