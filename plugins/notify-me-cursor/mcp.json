@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "notifyme_cursor": {
+      "command": "python3",
+      "args": [
+        "-u",
+        "${PLUGIN_ROOT}/scripts/mcp_server.py"
+      ]
+    }
+  }
+}
