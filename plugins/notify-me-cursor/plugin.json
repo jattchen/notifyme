@@ -1,0 +1,17 @@
+{
+  "name": "notify-me-cursor",
+  "version": "0.1.0",
+  "description": "按托管规则为 Cursor 任务发送私密 Bark 通知。",
+  "author": {
+    "name": "Notify Me Contributors"
+  },
+  "homepage": "https://github.com/jattchen/notifyme",
+  "repository": "https://github.com/jattchen/notifyme",
+  "license": "MIT",
+  "keywords": [
+    "bark",
+    "notification",
+    "cursor",
+    "mcp"
+  ]
+}

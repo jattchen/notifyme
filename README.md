@@ -57,3 +57,11 @@ Codex 使用独立的 `notify-me-codex` 插件身份，不覆盖或复用 Grok �
 安装后首次配置或诊断时显式调用插件 Skill，再在真实终端中运行插件根目录的 `scripts/notify_me.py setup`。该命令会隐藏读取 Bark URL、发送测试通知，并把 Notify Me Codex 托管规则写入 `~/.codex/AGENTS.md`。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
 
 正常通知必须由当前顶层主 Agent 直接调用 `mcp__notifyme_codex__notifyme`，并传入扁平的 `condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。
+
+## Cursor 适配版
+
+Cursor 使用独立的 `notify-me-cursor` 插件身份，不覆盖或复用 Grok / Codex。正常通知通过本地 stdio MCP 服务器 `notifyme_cursor` 的工具 `notifyme` 发送。
+
+安装后首次配置或诊断时显式调用插件 Skill，再弹出真实终端运行插件根目录的 `scripts/notify_me.py setup`。该命令会隐藏读取 Bark URL、发送测试通知，把 MCP 写入 `~/.cursor/mcp.json`，把托管规则写入 `~/.cursor/rules/notify-me.mdc`，并把 Skill 写到 `~/.cursor/skills/notify-me-cursor/`。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
+
+正常通知必须由当前顶层主 Agent 直接调用 MCP 服务器 `notifyme_cursor` 的工具 `notifyme`，并传入扁平的 `condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。完成后请新开一局 Cursor。
