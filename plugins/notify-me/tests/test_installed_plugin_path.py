@@ -475,18 +475,30 @@ class GitHubRepoNameTests(unittest.TestCase):
 
 
 class DocumentedCommandTests(unittest.TestCase):
-    def test_skill_and_readme_use_installed_plugins_glob(self):
-        skill = (ROOT / "skills" / "notify-me" / "SKILL.md").read_text(encoding="utf-8")
+    def _documented_doctor_command(self):
         readme = (REPO / "README.md").read_text(encoding="utf-8")
-        for text, label in ((skill, "SKILL.md"), (readme, "README.md")):
-            self.assertIn(DOCUMENTED_SCRIPT, text, label)
-            self.assertNotIn(DOCUMENTED_GLOB, text, label)
-            self.assertNotIn(LEGACY_PLUGIN, text, label)
-            self.assertNotIn(HARDCODED_HASH, text, label)
-            self.assertNotIn("api.day.app", text, label)
-        self.assertIn("python3 {} install".format(DOCUMENTED_SCRIPT), skill)
-        self.assertIn("python3 {} doctor".format(DOCUMENTED_SCRIPT), skill)
-        self.assertIn("python3 {} doctor".format(DOCUMENTED_SCRIPT), readme)
+        match = re.search(r"`(python3 ~/.grok/notify-me doctor)`", readme)
+        self.assertIsNotNone(match, "README.md must document a doctor command")
+        command = match.group(1)
+        self.assertNotIn(
+            "notify-me-*",
+            command,
+            "documented doctor must not be an unquoted glob",
+        )
+        return command
+
+    def test_readme_uses_stable_doctor_entry(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn(DOCUMENTED_SCRIPT, readme)
+        self.assertNotIn(DOCUMENTED_GLOB, readme)
+        self.assertNotIn(LEGACY_PLUGIN, readme)
+        self.assertNotIn(HARDCODED_HASH, readme)
+        self.assertNotIn("api.day.app", readme)
+        self.assertEqual(
+            self._documented_doctor_command(),
+            "python3 {} doctor".format(DOCUMENTED_SCRIPT),
+        )
+        self.assertFalse((ROOT / "skills" / "notify-me" / "SKILL.md").is_file())
 
     def test_documented_glob_expands_to_single_install(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -535,20 +547,7 @@ class DocumentedCommandTests(unittest.TestCase):
             entry = notify_me_paths.write_stable_entry(grok)
             self.assertIsNotNone(entry)
 
-            skill = (ROOT / "skills" / "notify-me" / "SKILL.md").read_text(
-                encoding="utf-8"
-            )
-            readme = (REPO / "README.md").read_text(encoding="utf-8")
-            match = re.search(r"^python3 (\S+) doctor$", skill, re.M)
-            self.assertIsNotNone(match, "SKILL.md must document a doctor command")
-            command = match.group(0)
-            self.assertNotIn(
-                "notify-me-*",
-                command,
-                "documented doctor must not be an unquoted glob",
-            )
-            self.assertIn(command, skill)
-            self.assertIn(command, readme)
+            command = self._documented_doctor_command()
 
             env = os.environ.copy()
             env["HOME"] = str(home)
@@ -590,20 +589,7 @@ class DocumentedCommandTests(unittest.TestCase):
             )
             self.assertTrue(os.access(entry, os.X_OK))
 
-            skill = (ROOT / "skills" / "notify-me" / "SKILL.md").read_text(
-                encoding="utf-8"
-            )
-            readme = (REPO / "README.md").read_text(encoding="utf-8")
-            match = re.search(r"^python3 (\S+) doctor$", skill, re.M)
-            self.assertIsNotNone(match, "SKILL.md must document a doctor command")
-            command = match.group(0)
-            self.assertNotIn(
-                "notify-me-*",
-                command,
-                "documented doctor must not be an unquoted glob",
-            )
-            self.assertIn(command, skill)
-            self.assertIn(command, readme)
+            command = self._documented_doctor_command()
 
             env = os.environ.copy()
             env["HOME"] = str(home)
