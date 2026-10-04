@@ -65,3 +65,13 @@ Cursor 使用独立的 `notify-me-cursor` 插件身份，不覆盖或复用 Grok
 安装后首次配置或诊断时显式调用插件 Skill，再弹出真实终端运行插件根目录的 `scripts/notify_me.py setup`。该命令会隐藏读取 Bark URL、发送测试通知，把 MCP 写入 `~/.cursor/mcp.json`，把托管规则写入 `~/.cursor/rules/notify-me.mdc`，并把 Skill 写到 `~/.cursor/skills/notify-me-cursor/`。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
 
 正常通知必须由当前顶层主 Agent 直接调用 MCP 服务器 `notifyme_cursor` 的工具 `notifyme`，并传入扁平的 `condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。完成后请新开一局 Cursor。
+
+## 应用命令行
+
+aiusage 这类本机程序使用独立的 `notify-me` 命令，不走上面的 Agent 插件。协议是版本 1：标准输出一行 JSON，成功时退出码为 0。
+
+它负责排队、查询、取消和有限次发送。不能保证手机只收到一次。租约到期后的取消自己写成已取消，并记住远端结果可能已经发出；查询只读，不会声称手机上的通知已被撤回。取消一个还不存在的事件会留下墓碑。墓碑不占活跃名额，但总行数满了会明确失败。
+
+安装只替换这个应用自己的启动程序。schema 8 在明确升级前只读，升级后的 schema 9 旧程序认不出来，因此已经投递过就不能把数据库退回去。细节、命令和恢复规则见 [docs/application-cli.md](docs/application-cli.md)。
+
+需要 Python 3.9 或更高，标准库即可。本次不把程序装到真实用户目录，也不发送真实 Bark 通知。

@@ -1,0 +1,27 @@
+{
+  "historical_source": "556f114:notify_me/application_push.py:_identity",
+  "fake_scope_salt": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "vectors": [
+    {
+      "source": "aiusage",
+      "event_id": "monitor-error-codex-1700000000",
+      "source_key": "d18e95b3f13fc23be259f631d4ac64759e5baeb4fce21f0e267cfdd3d4f5b88e",
+      "event_key": "f6bb0246608c309b06af95c708b11a949b8871a4b748e69a550c6afef138bd5d",
+      "notification_id": "nm_5f6a91e450c39f824a76667b9819f87c99e1ebe3"
+    },
+    {
+      "source": "aiusage",
+      "event_id": "quota-codex-1700604800-remaining-0-1",
+      "source_key": "d18e95b3f13fc23be259f631d4ac64759e5baeb4fce21f0e267cfdd3d4f5b88e",
+      "event_key": "b74207af5e3a000acc12a460d0a18f10c71f61dc9697546c38a40b3f31331527",
+      "notification_id": "nm_78babe257ed560218adf1d268ff8fade20f56e34"
+    },
+    {
+      "source": "otherapp",
+      "event_id": "monitor-error-codex-1700000000",
+      "source_key": "536b8dd1fcf6b655a59098d854054cc2f9c3ea5a55fe0560566bbd374f9345e0",
+      "event_key": "7a9b7e3b0be484b6feb4ebafb5538427f421f43ccf6ef583a4ef543418b28a72",
+      "notification_id": "nm_d453828b52ba8c0cf1bc67c186e93e75201abbd7"
+    }
+  ]
+}
