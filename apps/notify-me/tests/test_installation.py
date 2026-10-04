@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from notify_me_app import installation as installation
 from notify_me_app.configuration import application_identity
-from notify_me_app.storage import ManualClock
+from notify_me_app.storage import ManualClock, inspect_database
 
 from tests.support import IsolatedCase, mode_of, write_private
 from tests.test_migration import SALT, _load_vectors, _write_schema8
@@ -464,6 +464,133 @@ class InstallationTests(IsolatedCase):
         self.assertEqual(self._agent_status(), "accepted")
         self.assertEqual(self.transport.calls, 0)
 
+    def test_wal_commit_after_close_keeps_the_accepted_row(self):
+        recovered, observed, facts = self._late_commit_during_schema8_verify(wal=True)
+        self.assertEqual(observed["mode"], "wal")
+        self.assertTrue(observed["wal_exists"])
+        self.assertEqual(recovered["database_rollback"], "restored")
+        self.assertTrue(recovered["database_restored"])
+        self.assertEqual(recovered["schema_version"], 8)
+        self.assertEqual(facts["schema"], 8)
+        self.assertEqual(facts["row"], ("accepted",))
+        self.assertEqual(facts["kept"], ("accepted",))
+        self.assertEqual(facts["integrity"], "ok")
+        self.assertFalse(facts["marker"])
+        self.assertFalse(facts["backup"])
+        self.assertEqual(self._read(self.launcher), b"OLD-LAUNCHER\n")
+        self.assertEqual(self.transport.calls, 0)
+
+    def test_delete_journal_late_writer_keeps_the_accepted_row(self):
+        recovered, observed, facts = self._late_commit_during_schema8_verify(wal=False)
+        self.assertEqual(observed["mode"], "delete")
+        self.assertFalse(observed["wal_exists"])
+        self.assertEqual(recovered["database_rollback"], "restored")
+        self.assertTrue(recovered["database_restored"])
+        self.assertEqual(recovered["schema_version"], 8)
+        self.assertEqual(facts["schema"], 8)
+        self.assertEqual(facts["row"], ("accepted",))
+        self.assertEqual(facts["kept"], ("accepted",))
+        self.assertEqual(facts["integrity"], "ok")
+        self.assertFalse(facts["marker"])
+        self.assertFalse(facts["backup"])
+        self.assertEqual(self._read(self.launcher), b"OLD-LAUNCHER\n")
+        self.assertEqual(self.transport.calls, 0)
+
+    def _late_commit_during_schema8_verify(self, wal):
+        """Independent writer commits at the schema-8 check, and keeps its connection."""
+
+        self._prepare_legacy()
+        self._expect_interrupt("after-replace")
+        database = os.path.join(self.config, "state.sqlite3")
+        backup = os.path.join(self.config, "state.sqlite3.pre-schema9")
+        marker = os.path.join(self.config, "install-recovery.json")
+        if wal:
+            connection = sqlite3.connect(database)
+            try:
+                mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                connection.execute("SELECT * FROM schema_migrations").fetchall()
+            finally:
+                connection.close()
+            self.assertEqual(mode, "wal")
+        modes = []
+        for path in (database, backup):
+            connection = sqlite3.connect(path)
+            try:
+                modes.append(connection.execute("PRAGMA journal_mode").fetchone()[0])
+            finally:
+                connection.close()
+        self.assertEqual(modes, ["wal", "delete"] if wal else ["delete", "delete"])
+        probe = inspect_database(Path(database))
+        self.assertEqual(probe["status"], "ready")
+        self.assertTrue(probe["writable"])
+        self.assertEqual(probe["schema_version"], 9)
+        self.assertEqual(probe["integrity"], "ok")
+        held = []
+        observed = {}
+        real_verify = installation._verified_schema8
+
+        def verifyseam(path):
+            if os.path.abspath(str(path)) == os.path.abspath(database):
+                proc = subprocess.Popen(
+                    ["/usr/bin/python3", "-c", _AGENT_LATE_COMMIT, database, _AGENT_LATE_SQL],
+                    env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                )
+                held.append(proc)
+                line = proc.stdout.readline()
+                if proc.poll() is not None and not line:
+                    self.fail("late writer exited {}: {}".format(proc.returncode, proc.stderr.read()))
+                self.assertTrue(line.strip())
+                observed.update(json.loads(line))
+                self.assertEqual(observed["row"], "accepted")
+                observed["wal_exists"] = os.path.exists(database + "-wal")
+            return real_verify(path)
+
+        facts = {}
+        try:
+            with patch.object(installation, "_verified_schema8", verifyseam):
+                facts["recovered"] = self._recover()
+            connection = sqlite3.connect(database)
+            try:
+                facts["row"] = connection.execute(
+                    "SELECT status FROM notifications WHERE notification_id='external-agent-new'"
+                ).fetchone()
+                facts["kept"] = connection.execute(
+                    "SELECT status FROM notifications WHERE notification_id='agent-kept'"
+                ).fetchone()
+                facts["integrity"] = connection.execute("PRAGMA integrity_check").fetchone()[0]
+                facts["schema"] = connection.execute(
+                    "SELECT MAX(version) FROM schema_migrations"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            facts["marker"] = os.path.exists(marker)
+            facts["backup"] = os.path.exists(backup)
+        finally:
+            facts["writer_errors"] = self._finish_late_writers(held)
+        self.assertEqual(facts["writer_errors"], [])
+        return facts["recovered"], observed, facts
+
+    def _finish_late_writers(self, held):
+        errors = []
+        for proc in held:
+            try:
+                if proc.poll() is None:
+                    _out, err = proc.communicate("x", timeout=10)
+                else:
+                    _out, err = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                _out, err = proc.communicate()
+                errors.append("late writer timed out: {}".format(err))
+                continue
+            if proc.returncode != 0:
+                errors.append("late writer exit {}: {}".format(proc.returncode, err))
+        return errors
+
     def test_truncated_database_retries_without_truncating(self):
         self._prepare_legacy()
         self._expect_interrupt("after-replace")
@@ -702,4 +829,22 @@ _AGENT_INSERT_BLOCKING = (
     "WHERE notification_id='external-agent-new'\").fetchone()[0])\n"
     "print(connection.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0])\n"
     "connection.close()\n"
+)
+_AGENT_LATE_SQL = (
+    "INSERT INTO notifications SELECT 'external-agent-new',scope_key,condition_key,"
+    "'new-item',event_state_key,effect_fingerprint,'accepted',500001,500001,1,200,NULL "
+    "FROM notifications WHERE notification_id='agent-kept'"
+)
+_AGENT_LATE_COMMIT = (
+    "import json, os, sqlite3, sys\n"
+    "connection = sqlite3.connect(sys.argv[1])\n"
+    "mode = connection.execute('PRAGMA journal_mode').fetchone()[0]\n"
+    "connection.execute(sys.argv[2])\n"
+    "connection.commit()\n"
+    "row = connection.execute("
+    "\"SELECT status FROM notifications WHERE notification_id='external-agent-new'\""
+    ").fetchone()[0]\n"
+    "print(json.dumps({'mode': mode, 'row': row}), flush=True)\n"
+    "sys.stdin.read(1)\n"
+    "os._exit(0)\n"
 )

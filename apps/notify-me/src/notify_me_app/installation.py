@@ -590,12 +590,6 @@ def _unlink_sidecars(path):
             sidecar.unlink()
 
 
-def _unlink_database(path):
-    _unlink_sidecars(path)
-    if path.exists() and not path.is_symlink():
-        path.unlink()
-
-
 def _while_restore_locked(env, connection):
     """Test seam. The exclusive SQLite lock is held and the copy has not started."""
 
@@ -823,7 +817,9 @@ def _restore_database_exclusively(env, paths, data):
                 live = None
         if not _verified_schema8(paths.state_db):
             raise NotifyMeError("state_database_unavailable")
-        _unlink_sidecars(paths.state_db)
+        # SQLite owns -wal/-shm/-journal. Another connection can commit into
+        # the WAL after this one closes and before a manual delete. Removing
+        # those files drops that commit even though integrity still looks fine.
         os.chmod(str(paths.state_db), 0o600)
         os.unlink(paths.backup)
         return "restored"
@@ -847,7 +843,10 @@ def _rollback_created_database(path):
             connection.rollback()
             return "preserved"
         connection.commit()
-        _unlink_database(path)
+        # This connection still has the log files. Remove only the database
+        # name under the lock; SQLite releases its own logs on close.
+        if path.exists() and not path.is_symlink():
+            path.unlink()
         return "restored"
     finally:
         if connection is not None:
