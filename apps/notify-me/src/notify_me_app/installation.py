@@ -7,10 +7,10 @@ import json
 import os
 import shutil
 import sqlite3
-import stat
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -30,13 +30,25 @@ from .storage import (
     interprocess_lock,
     limits_from_env,
     migrate_8_to_9,
-    sqlite_immediate_available,
     write_binding,
 )
 
 
 _SOURCES = ("codex", "grok", "cursor")
 _PACKAGE_DIR = ("apps", "notify-me", "src", "notify_me_app")
+# Schema 8 tables that migration copies unchanged. An old agent writes these
+# without taking install.lock, so a restore has to compare them under the
+# SQLite lock before it replaces the live database.
+_AGENT_TABLES = (
+    "condition_configs",
+    "notifications",
+    "outbox",
+    "priority_effects",
+    "settings",
+    "subscription_event_payloads",
+    "subscription_events",
+    "subscriptions",
+)
 
 
 def repo_root_from_here():
@@ -245,6 +257,10 @@ def self_check(blob):
 
 
 def _install_locked(env, paths, launch, config, blob, label, digest, clock):
+    # self_check runs before the lock. Another install can leave a journal in
+    # that window. Re-check under the lock and do not touch its files.
+    if path_exists(_marker_path(paths, launch)):
+        raise NotifyMeError("recovery_required")
     migrated = False
     created_database = False
     schema_before = None
@@ -325,36 +341,50 @@ def _recover_locked(env, paths, launch, marker, clock):
     if _database_mutated(paths, data):
         mutated = True
     if mutated:
-        _discard_backup(paths)
         delivery_preserved = True
         rollback = "preserved"
-    elif _should_replace_database(paths, data):
-        if not sqlite_immediate_available(paths.state_db) or _database_mutated(paths, data):
-            # An external writer, including a schema 8 agent that does not
-            # take this lock, can still change the file. Keep schema 9.
-            _discard_backup(paths)
-            rollback = "blocked"
-        else:
-            raw = paths.backup.read_bytes()
-            _overwrite(paths.state_db, raw)
-            _unlink_sidecars(paths.state_db)
-            os.unlink(paths.backup)
-            database_restored = True
-            rollback = "restored"
     elif data.get("created_database") and paths.state_db is not None and path_exists(paths.state_db):
-        if _event_count(paths.state_db) == 0 and sqlite_immediate_available(paths.state_db):
-            _unlink_database(paths.state_db)
+        created = _rollback_created_database(paths.state_db)
+        if created == "restored":
             database_restored = True
             rollback = "restored"
-        elif _event_count(paths.state_db) != 0:
+        elif created == "preserved":
             delivery_preserved = True
             rollback = "preserved"
         else:
             rollback = "blocked"
-    elif paths.backup is not None and path_exists(paths.backup):
-        probe = inspect_database(paths.state_db) if paths.state_db is not None and path_exists(paths.state_db) else {}
-        if probe.get("schema_version") == SCHEMA_V8:
+    elif paths.backup is not None and path_exists(paths.backup) and paths.state_db is not None and path_exists(paths.state_db):
+        probe = inspect_database(paths.state_db)
+        if probe.get("status") == "ready" and probe.get("schema_version") == SCHEMA_V8 and probe.get("integrity") == "ok":
             os.unlink(paths.backup)
+        else:
+            outcome = _restore_database_exclusively(env, paths, data)
+            if outcome == "restored":
+                database_restored = True
+                rollback = "restored"
+            elif outcome == "preserved":
+                delivery_preserved = True
+                rollback = "preserved"
+            elif outcome == "blocked":
+                rollback = "blocked"
+            elif outcome == "unchanged":
+                confirmed = inspect_database(paths.state_db)
+                if confirmed.get("status") == "ready" and confirmed.get("schema_version") == SCHEMA_V8:
+                    os.unlink(paths.backup)
+            else:
+                raise NotifyMeError("state_database_unavailable")
+    elif paths.backup is not None and path_exists(paths.backup):
+        # The live file is gone. The snapshot is the only copy. Put it back
+        # before anything may delete the journal.
+        _materialize_backup(paths)
+        database_restored = True
+        rollback = "restored"
+    if not _database_outcome_is_durable(paths, rollback):
+        raise NotifyMeError("state_database_unavailable")
+    if rollback in ("preserved", "blocked"):
+        # The live database is the one we are keeping. Drop the snapshot only
+        # after that check, so a failed check cannot throw away the only copy.
+        _discard_backup(paths)
     code_restored = _apply_code_plan(code_plan, launch)
     marker.unlink()
     probe = inspect_database(paths.state_db) if paths.state_db is not None and path_exists(paths.state_db) else None
@@ -375,17 +405,6 @@ def _database_mutated(paths, data):
     if paths.state_db is None or not path_exists(paths.state_db) or data.get("migrated_at") is None:
         return False
     return has_mutation_since(paths.state_db, int(data["migrated_at"]))
-
-
-def _should_replace_database(paths, data):
-    if data.get("created_database"):
-        return False
-    if paths.backup is None or paths.state_db is None:
-        return False
-    if not path_exists(paths.backup) or not path_exists(paths.state_db):
-        return False
-    probe = inspect_database(paths.state_db)
-    return probe.get("schema_version") == SCHEMA_V9
 
 
 def _discard_backup(paths):
@@ -457,8 +476,7 @@ def _apply_code_plan(plan, launch):
         os.unlink(launch)
         return True
     if action == "restore":
-        _overwrite(launch, payload)
-        os.chmod(launch, 0o700)
+        _write_new(launch, payload, 0o700)
         if path_exists(previous):
             os.unlink(previous)
         return True
@@ -565,16 +583,6 @@ def _write_new(path, data, mode):
                 pass
 
 
-def _overwrite(path, data):
-    descriptor = os.open(str(path), os.O_WRONLY | os.O_TRUNC, 0o600)
-    try:
-        os.write(descriptor, data)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    os.chmod(str(path), stat.S_IMODE(os.lstat(str(path)).st_mode) & 0o700 or 0o600)
-
-
 def _unlink_sidecars(path):
     for suffix in ("-wal", "-shm", "-journal"):
         sidecar = Path(str(path) + suffix)
@@ -588,11 +596,259 @@ def _unlink_database(path):
         path.unlink()
 
 
-def _event_count(path):
-    connection = sqlite3.connect(str(path))
+def _while_restore_locked(env, connection):
+    """Test seam. The exclusive SQLite lock is held and the copy has not started."""
+
+    if env.get("NOTIFY_ME_TEST_MODE") != "1":
+        return
+    if env.get("NOTIFY_ME_TEST_RECOVER_BARRIER") != "sqlite-locked":
+        return
+    if connection is None:
+        return
+
+
+def _open_readonly(path):
+    uri = "file:{}?mode=ro".format(urllib.parse.quote(str(path)))
+    connection = sqlite3.connect(uri, uri=True, timeout=0.0)
+    connection.execute("PRAGMA query_only=ON")
+    connection.execute("PRAGMA busy_timeout=0")
+    return connection
+
+
+def _connect_exclusive(path):
+    """Hold the database file lock until this connection is closed.
+
+    BEGIN IMMEDIATE plus a commit would release a normal lock before the copy.
+    backup() also refuses to run inside that open transaction. Exclusive
+    locking mode keeps the lock across the commit and the copy.
+    """
+
+    connection = sqlite3.connect(str(path), timeout=0.0)
     try:
-        return connection.execute("SELECT COUNT(*) FROM application_events").fetchone()[0]
+        connection.execute("PRAGMA busy_timeout=0")
+        connection.execute("PRAGMA locking_mode=EXCLUSIVE")
+        connection.execute("BEGIN IMMEDIATE")
     except sqlite3.Error:
-        return 1
-    finally:
         connection.close()
+        raise
+    return connection
+
+
+def _backup_is_schema8(path):
+    probe = inspect_database(path)
+    return (
+        probe.get("status") == "ready"
+        and probe.get("schema_version") == SCHEMA_V8
+        and probe.get("integrity") == "ok"
+    )
+
+
+def _verified_schema8(path):
+    return _backup_is_schema8(path)
+
+
+def _database_outcome_is_durable(paths, rollback):
+    """True when success would not hide a missing or unreadable database."""
+
+    if rollback not in ("restored", "preserved", "blocked", "unchanged"):
+        return False
+    if paths.state_db is None or not path_exists(paths.state_db):
+        if paths.backup is not None and path_exists(paths.backup):
+            return False
+        return rollback in ("restored", "unchanged")
+    probe = inspect_database(paths.state_db)
+    if probe.get("integrity") != "ok":
+        return False
+    if rollback == "restored":
+        return probe.get("schema_version") in (SCHEMA_V8, SCHEMA_V9)
+    return probe.get("schema_version") in (SCHEMA_V8, SCHEMA_V9)
+
+
+def _plain_ident(name):
+    if not name or not (name[0].isalpha() or name[0] == "_"):
+        raise NotifyMeError("state_database_unavailable")
+    for char in name:
+        if not (char == "_" or char.islower() or char.isdigit()):
+            raise NotifyMeError("state_database_unavailable")
+    return name
+
+
+def _table_rows(connection, table):
+    table = _plain_ident(table)
+    found = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    if found is None:
+        return None
+    columns = []
+    for row in connection.execute("PRAGMA table_info({})".format(table)):
+        columns.append(_plain_ident(row[1]))
+    quoted = ", ".join('"{}"'.format(column) for column in columns)
+    sql = "SELECT {cols} FROM {table} ORDER BY {cols}".format(cols=quoted, table=table)
+    return [tuple(row) for row in connection.execute(sql)]
+
+
+def _agent_tables_match(live, source):
+    for table in _AGENT_TABLES:
+        if _table_rows(live, table) != _table_rows(source, table):
+            return False
+    return True
+
+
+def _mutated_on(connection, migrated_at):
+    row = connection.execute(
+        "SELECT value_json FROM settings WHERE key='delivery_since_upgrade'"
+    ).fetchone()
+    if row is not None:
+        try:
+            if json.loads(row[0]) is True:
+                return True
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return True
+    found = connection.execute(
+        "SELECT 1 FROM application_events WHERE updated_at >= ? LIMIT 1",
+        (int(migrated_at),),
+    ).fetchone()
+    return found is not None
+
+
+def _restore_decision(live, source, data):
+    names = {
+        row[0]
+        for row in live.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if not names:
+        return "restore"
+    if "schema_migrations" not in names:
+        raise NotifyMeError("state_database_unavailable")
+    version = live.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+    if version == SCHEMA_V8:
+        return "unchanged"
+    if version != SCHEMA_V9:
+        raise NotifyMeError("state_database_unavailable")
+    migrated_at = data.get("migrated_at")
+    if migrated_at is not None and _mutated_on(live, migrated_at):
+        return "preserved"
+    if migrated_at is None or not _agent_tables_match(live, source):
+        return "blocked"
+    return "restore"
+
+
+def _snapshot_ok(connection):
+    version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+    integrity = connection.execute("PRAGMA integrity_check").fetchone()
+    return version == SCHEMA_V8 and integrity is not None and str(integrity[0]).lower() == "ok"
+
+
+def _release(connection):
+    try:
+        connection.rollback()
+    except sqlite3.Error:
+        pass
+    connection.close()
+
+
+def _replace_unreadable_database(paths):
+    """Put the snapshot back when SQLite cannot lock the live file."""
+
+    if not _backup_is_schema8(paths.backup):
+        raise NotifyMeError("state_database_unavailable")
+    _write_new(paths.state_db, paths.backup.read_bytes(), 0o600)
+    if not _verified_schema8(paths.state_db):
+        raise NotifyMeError("state_database_unavailable")
+    _unlink_sidecars(paths.state_db)
+    os.unlink(paths.backup)
+    return "restored"
+
+
+def _materialize_backup(paths):
+    if not _backup_is_schema8(paths.backup):
+        raise NotifyMeError("state_database_unavailable")
+    _write_new(paths.state_db, paths.backup.read_bytes(), 0o600)
+    if not _verified_schema8(paths.state_db):
+        raise NotifyMeError("state_database_unavailable")
+    _unlink_sidecars(paths.state_db)
+    os.unlink(paths.backup)
+
+
+def _restore_database_exclusively(env, paths, data):
+    """Copy the schema 8 snapshot while this process holds the SQLite lock.
+
+    A check that rolls back before the copy does not stop an old agent. The
+    agent writes notifications without install.lock. If that lock cannot be
+    held for the whole copy, the caller keeps schema 9.
+    """
+
+    if not _backup_is_schema8(paths.backup):
+        raise NotifyMeError("state_database_unavailable")
+    live_probe = inspect_database(paths.state_db)
+    source = _open_readonly(paths.backup)
+    live = None
+    try:
+        try:
+            live = _connect_exclusive(paths.state_db)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise NotifyMeError("state_database_unavailable")
+            if live_probe.get("status") == "ready" and live_probe.get("schema_version") == SCHEMA_V9:
+                return "blocked"
+            raise NotifyMeError("state_database_unavailable")
+        except sqlite3.DatabaseError:
+            return _replace_unreadable_database(paths)
+        try:
+            decision = _restore_decision(live, source, data)
+            if decision != "restore":
+                live.rollback()
+                return decision
+            # The copy cannot run inside this transaction. The exclusive
+            # locking mode keeps other writers out until live.close().
+            live.commit()
+            _while_restore_locked(env, live)
+            source.backup(live)
+            if not _snapshot_ok(live):
+                raise NotifyMeError("state_database_unavailable")
+            live.commit()
+        except NotifyMeError:
+            _release(live)
+            live = None
+            raise
+        except sqlite3.Error:
+            _release(live)
+            live = None
+            raise NotifyMeError("state_database_unavailable")
+        finally:
+            if live is not None:
+                live.close()
+                live = None
+        if not _verified_schema8(paths.state_db):
+            raise NotifyMeError("state_database_unavailable")
+        _unlink_sidecars(paths.state_db)
+        os.chmod(str(paths.state_db), 0o600)
+        os.unlink(paths.backup)
+        return "restored"
+    finally:
+        source.close()
+
+
+def _rollback_created_database(path):
+    try:
+        connection = _connect_exclusive(path)
+    except sqlite3.Error:
+        return "blocked"
+    try:
+        try:
+            count = connection.execute("SELECT COUNT(*) FROM application_events").fetchone()[0]
+        except sqlite3.Error:
+            _release(connection)
+            connection = None
+            raise NotifyMeError("state_database_unavailable")
+        if count != 0:
+            connection.rollback()
+            return "preserved"
+        connection.commit()
+        _unlink_database(path)
+        return "restored"
+    finally:
+        if connection is not None:
+            connection.close()

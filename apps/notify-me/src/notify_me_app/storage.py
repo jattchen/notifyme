@@ -358,19 +358,29 @@ def inspect_database(path):
             "error_code": exc.code,
         }
     try:
-        probe = _schema_probe(connection)
-        integrity = None
         try:
-            row = connection.execute("PRAGMA quick_check").fetchone()
-            if row is not None and str(row[0]).lower() == "ok":
-                integrity = "ok"
-            else:
+            probe = _schema_probe(connection)
+            integrity = None
+            try:
+                row = connection.execute("PRAGMA quick_check").fetchone()
+                if row is not None and str(row[0]).lower() == "ok":
+                    integrity = "ok"
+                else:
+                    integrity = "unavailable"
+            except sqlite3.Error:
                 integrity = "unavailable"
+            probe["private"] = True
+            probe["integrity"] = integrity
+            return probe
         except sqlite3.Error:
-            integrity = "unavailable"
-        probe["private"] = True
-        probe["integrity"] = integrity
-        return probe
+            return {
+                "status": "unsupported",
+                "schema_version": None,
+                "writable": False,
+                "private": True,
+                "integrity": None,
+                "error_code": "state_database_unavailable",
+            }
     finally:
         connection.close()
 

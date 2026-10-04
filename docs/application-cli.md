@@ -80,13 +80,15 @@
 
 `recover` 按日记里的摘要核对启动程序。替换还没发生，就保持旧程序。替换已经发生，就从 `.previous` 把旧程序请回来。摘要对不上就停止，不猜。
 
-恢复数据库时，和所有新的应用写操作共用 `install.lock`。推送、取消、发送收尾和恢复不能同时改这份库。恢复会在覆盖文件之前再读一次是否已有新的接受或更新。若期间有一条通知被接受，就留下 schema 9，删掉旧备份，`database_restored` 为 false，`delivery_preserved` 为 true，`database_rollback` 为 `preserved`。不能先看一眼时间戳再把旧备份盖上去。
+新的应用写操作和恢复共用 `install.lock`。推送、取消、发送收尾和恢复不能同时改这份库。这把锁管不到旧 Agent：旧程序直接写 SQLite，不拿这把锁。回滚 schema 8 时，恢复会先独占这份库，在同一把锁里核对有没有新的接受、取消，以及 Agent 的 `notifications` 等表是否还和备份一致，然后在放开锁之前用 SQLite 自己的备份接口把内容拷回去。不能先看一眼再截断文件。
 
-旧的 Agent 程序不参与这把锁，这次也不改 Agent。schema 9 对旧程序来说过新，旧程序会停在 `state_schema_too_new`，不会清库。若 SQLite 自己正被别人写着，恢复无法保证互斥，就只回滚启动程序，保留 schema 9，删掉备份以免以后再盖掉已接受的记录或取消墓碑，`database_rollback` 为 `blocked`。这时不能说数据库已经回滚成功。
+若这期间已经有新的接受或取消，就留下 schema 9，确认库还能读之后才删掉旧备份。`database_restored` 为 false，`delivery_preserved` 为 true，`database_rollback` 为 `preserved`。若 Agent 表已经和备份不同，或者当时拿不到这把 SQLite 锁，就只换回旧启动程序，保留 schema 9，`database_rollback` 为 `blocked`。这时不能说数据库已经回滚成功。这次不改 Agent。schema 9 对旧程序来说过新，旧程序会停在 `state_schema_too_new`，不会清库。
 
-已经有投递或任何新行被写过之后，恢复只换回旧启动程序，不恢复旧数据库。失败发生在第一次投递之前，才可以把 schema 8 备份拷回去。
+恢复自己若中途停下，日记和备份都还在，下一轮可以再试。库若已经不是一份可读的数据库，就报错并留下日记和备份，不会假装恢复成功。启动程序先写到临时文件再替换，避免截断后留下半个程序。
 
-已有恢复日记时，再次安装返回 `recovery_required`，不会自动接着装。
+已经有投递或任何新行被写过之后，恢复只换回旧启动程序，不恢复旧数据库。失败发生在第一次投递之前，并且独占窗口里 Agent 表仍和备份一致，才把 schema 8 备份拷回去。
+
+已有恢复日记时，安装会在拿到锁之后再确认一次。别人还没做完的安装不会被盖掉，返回 `recovery_required`。
 
 `migrate-binding` 必须同时给出来源（`codex`、`grok` 或 `cursor`）和明确的绑定文件。它只会读那一个文件。已有应用绑定不会被覆盖，除非带 `--replace-binding`。只有插件、没有应用配置的机器，安装启动程序之后仍然是 `configuration_missing`。
 
@@ -112,7 +114,7 @@ zipapp 以 `#!/usr/bin/env python3` 开头。摘要是 `sha256(提交号 + 换�
 
 时间用整数秒。未配置时，`status` 的 `ok` 为 true，`push` 的 `ok` 为 false。
 
-不能保证恰好一次。同一通知号在有效期内至少一次，手机可能出现重复。接受之后的 `outcome_uncertain` 是历史标记。
+不能保证恰好一次，也没有必达保证。有界重试可能把同一通知号再送出去，手机上可能出现重复。接受之后的 `outcome_uncertain` 是历史标记。
 
 查询 `not_found` 不是取消成功。取消未知事件会写墓碑。墓碑不受活跃名额限制，但受总行数限制。
 

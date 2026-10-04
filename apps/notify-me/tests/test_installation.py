@@ -4,8 +4,12 @@
 import json
 import os
 import sqlite3
+import subprocess
+import time
 from pathlib import Path
+from unittest.mock import patch
 
+from notify_me_app import installation as installation
 from notify_me_app.configuration import application_identity
 from notify_me_app.storage import ManualClock
 
@@ -396,6 +400,175 @@ class InstallationTests(IsolatedCase):
         self.assertIn(b"replacekey", self._read(os.path.join(self.config, ".env")))
         self.assertNotIn(b"decoykey01", self._read(os.path.join(self.config, ".env")))
 
+    def test_external_agent_commit_keeps_schema9(self):
+        self._prepare_legacy()
+        self._expect_interrupt("after-replace")
+        database = os.path.join(self.config, "state.sqlite3")
+        completed = subprocess.run(
+            ["/usr/bin/python3", "-c", _AGENT_INSERT, database],
+            env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "accepted")
+        recovered = self._recover()
+        self.assertEqual(recovered["database_rollback"], "blocked")
+        self.assertFalse(recovered["database_restored"])
+        self.assertFalse(recovered["delivery_preserved"])
+        self.assertTrue(recovered["code_restored"])
+        self.assertEqual(recovered["schema_version"], 9)
+        self.assertEqual(self._schema_version(), 9)
+        self.assertEqual(self._notification_status("external-agent-new"), "accepted")
+        self.assertEqual(self._agent_status(), "accepted")
+        self.assertEqual(self._read(self.launcher), b"OLD-LAUNCHER\n")
+        self.assertFalse(os.path.exists(os.path.join(self.config, "state.sqlite3.pre-schema9")))
+        self.assertEqual(self.transport.calls, 0)
+
+    def test_restore_holds_sqlite_lock_until_the_copy_finishes(self):
+        self._prepare_legacy()
+        self._expect_interrupt("after-replace")
+        database = os.path.join(self.config, "state.sqlite3")
+        held = []
+
+        def while_locked(env, connection):
+            self.assertIsNotNone(connection)
+            proc = subprocess.Popen(
+                ["/usr/bin/python3", "-c", _AGENT_INSERT_BLOCKING, database],
+                env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
+            held.append(proc)
+            started = proc.stdout.readline()
+            self.assertEqual(started.strip(), "starting")
+            time.sleep(0.3)
+            self.assertIsNone(proc.poll(), "sqlite writer committed while the restore lock was held")
+
+        with patch.object(installation, "_while_restore_locked", while_locked):
+            recovered = self._recover()
+        self.assertEqual(len(held), 1)
+        stdout, stderr = held[0].communicate(timeout=10)
+        self.assertEqual(held[0].returncode, 0, stderr)
+        self.assertIn("COMMITTED", stdout)
+        self.assertIn("accepted", stdout)
+        self.assertIn("8", stdout.splitlines())
+        self.assertEqual(recovered["database_rollback"], "restored")
+        self.assertTrue(recovered["database_restored"])
+        self.assertEqual(recovered["schema_version"], 8)
+        self.assertEqual(self._schema_version(), 8)
+        self.assertEqual(self._notification_status("external-agent-new"), "accepted")
+        self.assertEqual(self._agent_status(), "accepted")
+        self.assertEqual(self.transport.calls, 0)
+
+    def test_truncated_database_retries_without_truncating(self):
+        self._prepare_legacy()
+        self._expect_interrupt("after-replace")
+        database = os.path.join(self.config, "state.sqlite3")
+        marker = os.path.join(self.config, "install-recovery.json")
+        backup = os.path.join(self.config, "state.sqlite3.pre-schema9")
+        with open(database, "wb") as handle:
+            handle.truncate(0)
+        os.chmod(database, 0o600)
+        self.assertEqual(os.path.getsize(database), 0)
+        self.assertTrue(os.path.exists(marker))
+        self.assertTrue(os.path.exists(backup))
+        real_open = os.open
+
+        def reject_truncate(path, flags, *args, **kwargs):
+            if flags & os.O_TRUNC:
+                raise AssertionError("recover truncated {}".format(path))
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(installation.os, "open", reject_truncate):
+            recovered = self._recover()
+        self.assertEqual(recovered["database_rollback"], "restored")
+        self.assertTrue(recovered["database_restored"])
+        self.assertEqual(recovered["schema_version"], 8)
+        self.assertEqual(self._schema_version(), 8)
+        self.assertGreater(os.path.getsize(database), 0)
+        self.assertEqual(self._agent_status(), "accepted")
+        self.assertEqual(self._read(self.launcher), b"OLD-LAUNCHER\n")
+        self.assertFalse(os.path.exists(marker))
+        self.assertFalse(os.path.exists(backup))
+        self.assertEqual(self.transport.calls, 0)
+
+    def test_corrupt_live_database_is_restored_from_the_snapshot(self):
+        self._prepare_legacy()
+        self._expect_interrupt("after-replace")
+        database = os.path.join(self.config, "state.sqlite3")
+        with open(database, "wb") as handle:
+            handle.write(b"not a database!!!!")
+        os.chmod(database, 0o600)
+        recovered = self._recover()
+        self.assertEqual(recovered["database_rollback"], "restored")
+        self.assertTrue(recovered["database_restored"])
+        self.assertEqual(recovered["schema_version"], 8)
+        self.assertEqual(self._schema_version(), 8)
+        self.assertEqual(self._agent_status(), "accepted")
+        self.assertEqual(self._read(self.launcher), b"OLD-LAUNCHER\n")
+        self.assertFalse(os.path.exists(os.path.join(self.config, "install-recovery.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.config, "state.sqlite3.pre-schema9")))
+        self.assertEqual(self.transport.calls, 0)
+
+    def test_unreadable_database_keeps_the_marker_when_the_snapshot_is_unusable(self):
+        self._prepare_legacy()
+        self._expect_interrupt("after-replace")
+        database = os.path.join(self.config, "state.sqlite3")
+        marker = os.path.join(self.config, "install-recovery.json")
+        backup = os.path.join(self.config, "state.sqlite3.pre-schema9")
+        previous = self.launcher + ".previous"
+        with open(database, "wb") as handle:
+            handle.write(b"not a database!!!!")
+        os.chmod(database, 0o600)
+        with open(backup, "wb") as handle:
+            handle.write(b"not a snapshot!!!!")
+        os.chmod(backup, 0o600)
+        code, body, _text, _err = self.cli(
+            ["recover", "--launcher", self.launcher, "--config-dir", self.config]
+        )
+        self.assertEqual(code, 1)
+        self.assert_error("state_database_unavailable", body)
+        self.assertTrue(os.path.exists(marker))
+        self.assertTrue(os.path.exists(backup))
+        self.assertTrue(os.path.exists(previous))
+        self.assertEqual(self._read(database), b"not a database!!!!")
+        self.assertNotEqual(self._read(self.launcher), b"OLD-LAUNCHER\n")
+        self.assertEqual(self.transport.calls, 0)
+        code, again, _text, _err = self.cli(
+            ["recover", "--launcher", self.launcher, "--config-dir", self.config]
+        )
+        self.assert_error("state_database_unavailable", again)
+        self.assertTrue(os.path.exists(marker))
+        self.assertTrue(os.path.exists(backup))
+
+    def test_install_rechecks_marker_inside_the_lock(self):
+        self._prepare_legacy()
+        real = installation.self_check
+
+        def between_precheck_and_lock(blob):
+            real(blob)
+            with patch.object(installation, "self_check", real):
+                self._expect_interrupt("after-commit")
+
+        with patch.object(installation, "self_check", between_precheck_and_lock):
+            code, outer, _text, _err = self.cli(
+                ["install", "--launcher", self.launcher, "--config-dir", self.config]
+            )
+        self.assertEqual(code, 1)
+        self.assert_error("recovery_required", outer)
+        marker_path = os.path.join(self.config, "install-recovery.json")
+        previous = self.launcher + ".previous"
+        self.assertTrue(os.path.exists(marker_path))
+        marker = json.loads(self._read(marker_path).decode("utf-8"))
+        self.assertEqual(marker["phase"], "replacing")
+        self.assertEqual(self._read(previous), b"OLD-LAUNCHER\n")
+        self.assertTrue(self._read(self.launcher).startswith(b"#!/usr/bin/env python3\n"))
+        self.assertEqual(self.transport.calls, 0)
+
     def _prepare_legacy(self):
         if os.path.isdir(self.config):
             for name in os.listdir(self.config):
@@ -487,10 +660,46 @@ class InstallationTests(IsolatedCase):
             connection.close()
 
     def _agent_status(self):
+        return self._notification_status("agent-kept")
+
+    def _notification_status(self, notification_id):
         connection = sqlite3.connect(os.path.join(self.config, "state.sqlite3"))
         try:
-            return connection.execute(
-                "SELECT status FROM notifications WHERE notification_id='agent-kept'"
-            ).fetchone()[0]
+            row = connection.execute(
+                "SELECT status FROM notifications WHERE notification_id=?",
+                (notification_id,),
+            ).fetchone()
         finally:
             connection.close()
+        self.assertIsNotNone(row)
+        return row[0]
+
+
+_AGENT_INSERT = (
+    "import sqlite3, sys\n"
+    "connection = sqlite3.connect(sys.argv[1])\n"
+    "connection.execute(\"INSERT INTO notifications SELECT "
+    "'external-agent-new', scope_key, condition_key, 'new-item', event_state_key, "
+    "effect_fingerprint, 'accepted', 500001, 500001, 1, 200, NULL "
+    "FROM notifications WHERE notification_id='agent-kept'\")\n"
+    "connection.commit()\n"
+    "print(connection.execute(\"SELECT status FROM notifications "
+    "WHERE notification_id='external-agent-new'\").fetchone()[0])\n"
+    "connection.close()\n"
+)
+_AGENT_INSERT_BLOCKING = (
+    "import sqlite3, sys\n"
+    "print('starting', flush=True)\n"
+    "connection = sqlite3.connect(sys.argv[1], timeout=5)\n"
+    "connection.execute('PRAGMA busy_timeout=5000')\n"
+    "connection.execute(\"INSERT INTO notifications SELECT "
+    "'external-agent-new', scope_key, condition_key, 'new-item', event_state_key, "
+    "effect_fingerprint, 'accepted', 500001, 500001, 1, 200, NULL "
+    "FROM notifications WHERE notification_id='agent-kept'\")\n"
+    "connection.commit()\n"
+    "print('COMMITTED')\n"
+    "print(connection.execute(\"SELECT status FROM notifications "
+    "WHERE notification_id='external-agent-new'\").fetchone()[0])\n"
+    "print(connection.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0])\n"
+    "connection.close()\n"
+)

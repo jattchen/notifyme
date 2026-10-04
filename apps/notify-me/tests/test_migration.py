@@ -7,6 +7,7 @@ import sqlite3
 import stat
 import tempfile
 import unittest
+import unittest.mock
 import urllib.parse
 from pathlib import Path
 
@@ -18,8 +19,30 @@ from notify_me_app.storage import ManualClock, migrate_8_to_9
 
 
 _EMBEDDED_VECTORS = os.path.join(os.path.dirname(__file__), "legacy_identity_vectors.json")
-_EXTERNAL_VECTORS = "/tmp/aiusage-goal-20261004/legacy-identity-vectors.json"
 SALT = "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+_HISTORICAL_VECTORS = [
+    {
+        "source": "aiusage",
+        "event_id": "monitor-error-codex-1700000000",
+        "source_key": "d18e95b3f13fc23be259f631d4ac64759e5baeb4fce21f0e267cfdd3d4f5b88e",
+        "event_key": "f6bb0246608c309b06af95c708b11a949b8871a4b748e69a550c6afef138bd5d",
+        "notification_id": "nm_5f6a91e450c39f824a76667b9819f87c99e1ebe3",
+    },
+    {
+        "source": "aiusage",
+        "event_id": "quota-codex-1700604800-remaining-0-1",
+        "source_key": "d18e95b3f13fc23be259f631d4ac64759e5baeb4fce21f0e267cfdd3d4f5b88e",
+        "event_key": "b74207af5e3a000acc12a460d0a18f10c71f61dc9697546c38a40b3f31331527",
+        "notification_id": "nm_78babe257ed560218adf1d268ff8fade20f56e34",
+    },
+    {
+        "source": "otherapp",
+        "event_id": "monitor-error-codex-1700000000",
+        "source_key": "536b8dd1fcf6b655a59098d854054cc2f9c3ea5a55fe0560566bbd374f9345e0",
+        "event_key": "7a9b7e3b0be484b6feb4ebafb5538427f421f43ccf6ef583a4ef543418b28a72",
+        "notification_id": "nm_d453828b52ba8c0cf1bc67c186e93e75201abbd7",
+    },
+]
 MIGRATION_NOW = 500000
 P2_EFFECT_JSON = json.dumps(
     {"call": False, "delivery_ttl_seconds": 15000, "level": "active", "sound": "bell"},
@@ -29,18 +52,20 @@ P2_EFFECT_JSON = json.dumps(
 
 
 def _load_vectors():
+    """Repository fixture only. The historical HMAC values are fixed below."""
+
     with open(_EMBEDDED_VECTORS, "r", encoding="utf-8") as handle:
         embedded = json.load(handle)
-    if not os.path.exists(_EXTERNAL_VECTORS):
-        raise AssertionError("legacy identity evidence file is missing")
-    with open(_EXTERNAL_VECTORS, "r", encoding="utf-8") as handle:
-        external = json.load(handle)
-    if external != embedded:
-        raise AssertionError("embedded HMAC vectors drifted from the evidence file")
     if embedded.get("fake_scope_salt") != SALT:
         raise AssertionError("legacy identity vector salt does not match the fixture")
     if embedded.get("historical_source") != "556f114:notify_me/application_push.py:_identity":
         raise AssertionError("legacy identity vector source drifted")
+    if embedded.get("vectors") != _HISTORICAL_VECTORS:
+        raise AssertionError("legacy identity vectors drifted")
+    for row in _HISTORICAL_VECTORS:
+        got = application_identity(SALT, row["source"], row["event_id"])
+        if got != (row["source_key"], row["event_key"], row["notification_id"]):
+            raise AssertionError("legacy identity HMAC drifted for {}".format(row["event_id"]))
     return embedded["vectors"]
 
 
@@ -295,6 +320,29 @@ class Schema8MigrationTests(unittest.TestCase):
         path = Path(self._root) / "state.sqlite3"
         _write_schema8(path, self._vectors)
         return path
+
+    def test_identity_fixture_does_not_read_outside_the_repository(self):
+        self.assertTrue(os.path.isfile(_EMBEDDED_VECTORS))
+        self.assertTrue(_EMBEDDED_VECTORS.endswith(os.path.join("tests", "legacy_identity_vectors.json")))
+
+        real_open = open
+
+        def guarded_open(path, *args, **kwargs):
+            text = path if isinstance(path, str) else str(path)
+            if text.startswith("/tmp/"):
+                raise AssertionError("identity fixture read an external file")
+            return real_open(path, *args, **kwargs)
+
+        with unittest.mock.patch("builtins.open", guarded_open):
+            vectors = _load_vectors()
+        self.assertEqual(
+            [row["notification_id"] for row in vectors],
+            [
+                "nm_5f6a91e450c39f824a76667b9819f87c99e1ebe3",
+                "nm_78babe257ed560218adf1d268ff8fade20f56e34",
+                "nm_d453828b52ba8c0cf1bc67c186e93e75201abbd7",
+            ],
+        )
 
     def test_sqlite_row_has_no_get_and_would_crash_normalize(self):
         connection = sqlite3.connect(":memory:")
