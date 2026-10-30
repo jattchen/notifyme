@@ -4,7 +4,7 @@ import os
 import re
 import tempfile
 
-from .paths import agents_path
+from .paths import agents_path, write_problem
 
 
 TOOL_PERMISSION = "mcp__plugin_notify-me-claude_notifyme_claude__notifyme"
@@ -54,10 +54,9 @@ def _apply(text):
 
 def check_target():
     """Fail before any write if the rule path can't hold a regular file."""
-    path = agents_path()
-    if path.exists() and not path.is_file():
-        raise OSError("notify-me-claude.md 不是普通文件")
-    _write_destination(path)
+    problem = write_problem(_write_destination(agents_path()))
+    if problem:
+        raise OSError(problem)
 
 
 def plan():
@@ -78,7 +77,8 @@ def _write_destination(path):
         return path
     try:
         dest = path.resolve()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
+        # Python < 3.13 raises RuntimeError for a symlink loop.
         raise OSError("notify-me-claude.md 是符号链接，但无法解析目标：{}".format(exc)) from exc
     if dest.exists() and dest.is_dir():
         raise OSError("notify-me-claude.md 是符号链接，不能指向目录")

@@ -7,7 +7,7 @@ import tempfile
 
 from .agents_rule import TOOL_PERMISSION
 from .errors import NotifyMeError
-from .paths import installed_plugins_path, settings_path
+from .paths import installed_plugins_path, settings_path, write_problem
 
 
 PLUGIN_ID = "notify-me-claude@notifyme"
@@ -18,7 +18,8 @@ def _write_destination(path):
         return path
     try:
         dest = path.resolve()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
+        # Python < 3.13 raises RuntimeError for a symlink loop.
         raise NotifyMeError("settings_unreadable", "settings.json 是符号链接，但无法解析目标") from exc
     if dest.exists() and dest.is_dir():
         raise NotifyMeError("settings_unreadable", "settings.json 是符号链接，不能指向目录")
@@ -66,10 +67,9 @@ def check_settings():
     `permissions` or `allow` is treated like a missing one.
     """
     path = settings_path()
-    if path.exists() and not path.is_file():
-        raise NotifyMeError("settings_unreadable", "Claude Code settings.json 不是普通文件")
-    if path.is_symlink():
-        _write_destination(path)
+    problem = write_problem(_write_destination(path))
+    if problem:
+        raise NotifyMeError("settings_unreadable", "Claude Code settings.json 无法写入：{}".format(problem))
     current = _read_json_object(path, "settings_unreadable", "Claude Code settings.json")
     if current is None:
         current = {}

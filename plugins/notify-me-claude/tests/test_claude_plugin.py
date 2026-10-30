@@ -571,6 +571,42 @@ class ClaudeSetupTests(unittest.TestCase):
             self._assert_stopped_before_prompt(env, result, prompted, "rule_unwritable", "rule dir")
             self.assertFalse((env.home / "settings.json").exists())
 
+    def test_unwritable_targets_fail_before_prompt(self):
+        cases = {
+            "rules is a file": lambda env: (env.home / "rules").write_text("x"),
+            "rules dir read-only": lambda env: (env.home / "rules").mkdir(mode=0o555),
+            "config dir read-only": lambda env: os.chmod(env.home, 0o555),
+        }
+        for label, arrange in cases.items():
+            if label != "rules is a file" and os.geteuid() == 0:
+                continue
+            with ClaudeEnv() as env:
+                arrange(env)
+                try:
+                    result, prompted = self._run_setup()
+                finally:
+                    os.chmod(env.home, 0o755)
+                    if (env.home / "rules").is_dir():
+                        os.chmod(env.home / "rules", 0o755)
+                self.assertIn(
+                    getattr(result, "code", None), ("settings_unreadable", "rule_unwritable"), label
+                )
+                self.assertEqual(prompted, [], label)
+                self.assertFalse(Path(os.environ["CLAUDE_NOTIFY_ME_HOME"], "binding.json").exists(), label)
+                self.assertFalse((env.home / "settings.json").exists(), label)
+
+    def test_symlink_loops_fail_before_prompt_with_named_codes(self):
+        for target, code in (
+            (("settings.json",), "settings_unreadable"),
+            (("rules", "notify-me-claude.md"), "rule_unwritable"),
+        ):
+            with ClaudeEnv() as env:
+                link = env.home.joinpath(*target)
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(link)
+                result, prompted = self._run_setup()
+                self._assert_stopped_before_prompt(env, result, prompted, code, target[-1])
+
     def test_null_permissions_or_allow_are_treated_as_missing(self):
         for raw, kept in (
             ({"permissions": None, "model": "opus"}, {}),

@@ -41,6 +41,29 @@ def installed_plugins_path():
     return claude_home() / "plugins" / "installed_plugins.json"
 
 
+def write_problem(dest):
+    """Explain why an atomic replace of `dest` would fail, or return None.
+
+    Checks without creating anything: an existing `dest` must be a regular
+    file, and the nearest existing ancestor of its directory must be a
+    directory we can write into (to create the temp file, or missing dirs).
+    """
+    if dest.exists() and not dest.is_file():
+        return "{} 不是普通文件".format(dest)
+    ancestor = dest.parent
+    while not ancestor.exists():
+        if ancestor.is_symlink():
+            return "{} 是失效的符号链接".format(ancestor)
+        if ancestor.parent == ancestor:
+            break
+        ancestor = ancestor.parent
+    if not ancestor.is_dir():
+        return "{} 不是目录".format(ancestor)
+    if not os.access(str(ancestor), os.W_OK | os.X_OK):
+        return "{} 不可写".format(ancestor)
+    return None
+
+
 def ensure_private_dir(path):
     path.mkdir(parents=True, exist_ok=True)
     os.chmod(path, stat.S_IRWXU)
