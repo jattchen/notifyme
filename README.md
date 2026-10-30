@@ -66,6 +66,19 @@ Cursor 使用独立的 `notify-me-cursor` 插件身份，不覆盖或复用 Grok
 
 正常通知必须由当前顶层主 Agent 直接调用 MCP 服务器 `notifyme_cursor` 的工具 `notifyme`，并传入扁平的 `condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。完成后请新开一局 Cursor。
 
+## Claude Code 适配版
+
+Claude Code 使用独立的 `notify-me-claude` 插件身份，不覆盖或复用 Grok / Codex / Cursor。本仓库根目录就是 Claude Code 插件市场 `notifyme`，插件自带本地 stdio MCP 服务器 `notifyme_claude`，工具名为 `mcp__plugin_notify-me-claude_notifyme_claude__notifyme`。
+
+```bash
+claude plugin marketplace add jattchen/notifyme
+claude plugin install notify-me-claude@notifyme
+```
+
+安装后在 Claude Code 里显式调用 `/notify-me-claude`，它会弹出真实终端运行插件根目录的 `scripts/notify_me.py setup`。该命令会隐藏读取 Bark URL、发送测试通知，把托管规则写入 `~/.claude/rules/notify-me-claude.md`（每个项目都会加载），并把上述工具加入 `~/.claude/settings.json` 的 `permissions.allow`，免得用户离开时通知卡在授权弹窗。插件本身不能带常驻规则，所以这一步不能省。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
+
+正常通知必须由当前顶层主 Agent 直接调用该 MCP 工具，并传入扁平的 `condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。完成后请新开一局 Claude Code。
+
 ## 应用命令行
 
 aiusage 这类本机程序使用独立的 `notify-me` 命令，不走上面的 Agent 插件。协议是版本 1：标准输出一行 JSON，成功时退出码为 0。
