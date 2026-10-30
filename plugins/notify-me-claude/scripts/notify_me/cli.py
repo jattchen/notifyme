@@ -2,7 +2,11 @@
 
 import getpass
 import json
+import os
+import shlex
+import subprocess
 import sys
+from pathlib import Path
 
 from .agents_rule import commit as commit_agents
 from .agents_rule import has_managed_block, plan as plan_agents
@@ -12,6 +16,7 @@ from .deliver import Deliverer
 from .errors import NotifyMeError
 from .host_install import (
     PLUGIN_ID,
+    check_settings,
     commit_permission,
     permission_allowed,
     plugin_enabled,
@@ -69,10 +74,43 @@ def _restore_previous_binding(binding, previous):
 
 
 def _commit_host():
+    # Pre-approve the tool before the rule goes live, so a failure never
+    # leaves a rule that sends every session into a permission prompt.
     written = {}
-    written["agents"] = commit_agents()
-    written["permission"] = commit_permission()
+    for key, code, step, commit in (
+        ("permission", "settings_write_failed", "settings.json 授权", commit_permission),
+        ("agents", "rule_write_failed", "托管规则", commit_agents),
+    ):
+        try:
+            written[key] = commit()
+        except Exception as exc:
+            raise _HostWriteError(code, step, exc, written) from exc
     return written
+
+
+class _HostWriteError(Exception):
+    def __init__(self, code, step, cause, written):
+        super().__init__(str(cause))
+        self.code = code
+        self.step = step
+        self.written = written
+
+
+def _plugin_state():
+    installed = bool(plugin_installs())
+    enabled = plugin_enabled()
+    warnings = []
+    if not installed:
+        warnings.append("plugin_not_installed")
+    if not enabled:
+        warnings.append("plugin_not_enabled")
+    return {"plugin_installed": installed, "plugin_enabled": enabled, "warnings": warnings}
+
+
+_PLUGIN_HINT = (
+    "未检测到已安装并启用的 {}；先运行 claude plugin marketplace add jattchen/notifyme "
+    "和 claude plugin install {}，否则规则指向的工具不存在".format(PLUGIN_ID, PLUGIN_ID)
+)
 
 
 def _setup(options):
@@ -84,6 +122,11 @@ def _setup(options):
     if options.get("dry_run"):
         return {"ok": True, "status": "dry_run"}
 
+    check_settings()
+    plugin = _plugin_state()
+    sys.stderr.write("配置目录：{}\n".format(claude_home()))
+    if plugin["warnings"]:
+        sys.stderr.write("警告：{}\n".format(_PLUGIN_HINT))
     raw = getpass.getpass("请粘贴 Bark 推送 URL（输入不可见）：")
     endpoint = BarkEndpoint.parse(raw)
     binding = Binding()
@@ -118,26 +161,76 @@ def _setup(options):
 
     try:
         written = _commit_host()
-    except Exception as exc:
+    except _HostWriteError as exc:
         return {
             "ok": False,
             "status": "bound",
             "host": view["host"],
             "test": "accepted",
+            "config_dir": str(claude_home()),
+            "permission": exc.written.get("permission"),
             "error": {
-                "code": "agents_write_failed",
-                "message": "测试通知已被接受，卡在写入 Claude Code 托管配置",
+                "code": exc.code,
+                "message": "测试通知已被接受，卡在写入{}".format(exc.step),
                 "detail": str(exc),
             },
         }
-    return {
+    result = {
         "ok": True,
         "status": "bound",
         "host": view["host"],
         "test": "accepted",
+        "config_dir": str(claude_home()),
         "agents": written.get("agents"),
         "permission": written.get("permission"),
     }
+    result.update(plugin)
+    if plugin["warnings"]:
+        result["hint"] = _PLUGIN_HINT
+    return result
+
+
+_FORWARDED_ENV = ("CLAUDE_CONFIG_DIR", "CLAUDE_NOTIFY_ME_HOME")
+
+
+def _applescript_string(text):
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def setup_terminal_script(env=None, python=None):
+    """Build the AppleScript that runs setup in a new Terminal window.
+
+    The new shell doesn't inherit this process's environment, so the config
+    and state overrides are passed explicitly and every path is shell-quoted.
+    """
+    env = env if env is not None else os.environ
+    parts = ["env"]
+    for key in _FORWARDED_ENV:
+        value = env.get(key)
+        if value:
+            parts.append("{}={}".format(key, shlex.quote(value)))
+    parts.append(shlex.quote(python or sys.executable))
+    parts.append(shlex.quote(str(Path(__file__).resolve().parents[1] / "notify_me.py")))
+    parts.append("setup")
+    command = "bash -lc {}".format(shlex.quote(" ".join(parts)))
+    return (
+        'tell application "Terminal"\n'
+        "  activate\n"
+        "  do script {}\n"
+        "end tell\n"
+    ).format(_applescript_string(command))
+
+
+def _open_setup(options):
+    script = setup_terminal_script()
+    if options.get("dry_run"):
+        return {"ok": True, "status": "dry_run", "script": script, "config_dir": str(claude_home())}
+    completed = subprocess.run(
+        ["osascript"], input=script, text=True, capture_output=True
+    )
+    if completed.returncode != 0:
+        raise NotifyMeError("terminal_failed", "无法打开终端：{}".format(completed.stderr.strip()))
+    return {"ok": True, "status": "opened", "config_dir": str(claude_home())}
 
 
 def _doctor(deliverer):
@@ -178,7 +271,7 @@ def main(argv=None):
         return _emit(
             NotifyMeError(
                 "invalid_arguments",
-                "请指定 setup、test、refresh-icons、doctor 或 agents-rule 命令",
+                "请指定 open-setup、setup、test、refresh-icons、doctor 或 agents-rule 命令",
             ).as_dict(),
             1,
         )
@@ -198,6 +291,8 @@ def main(argv=None):
                 raise NotifyMeError("invalid_arguments", "agents-rule 只支持 plan 或 commit")
         elif command == "setup":
             result = _setup(_options(argv[1:]))
+        elif command == "open-setup":
+            result = _open_setup(_options(argv[1:]))
         elif command == "test":
             result = deliverer.test(_options(argv[1:]))
         elif command == "refresh-icons":

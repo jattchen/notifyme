@@ -12,32 +12,22 @@ disable-model-invocation: true
 
 ## 安装
 
-插件未装时先在终端执行：
-
-```text
-claude plugin marketplace add jattchen/notifyme
-claude plugin install notify-me-claude@notifyme
-```
+插件需先经 `claude plugin install notify-me-claude@notifyme` 安装并启用，安装方法见仓库 README。
 
 ## 绑定 Bark
 
-用户即使当前没有打开终端，也要**新弹出**一个 macOS「终端」窗口，并在里面执行下面这条命令（命令会自己跑配置，不要让用户复制粘贴）。
+用户即使当前没有打开终端，也要用下面这条命令**新弹出**一个 macOS「终端」窗口跑 setup（不要让用户复制粘贴）。它会把当前会话的 `CLAUDE_CONFIG_DIR` 带进新终端，并给路径加好引号。
 
-```bash
-osascript <<'OSA'
-tell application "Terminal"
-  activate
-  do script "bash -lc 'python3 <plugin-root>/scripts/notify_me.py setup'"
-end tell
-OSA
+```text
+python3 "<plugin-root>/scripts/notify_me.py" open-setup
 ```
 
-命令会隐藏读取 Bark URL、发送测试通知，把托管规则写入 `~/.claude/rules/notify-me-claude.md`，并把上述 MCP 工具加入 `~/.claude/settings.json` 的 `permissions.allow`，免得用户离开时通知卡在授权弹窗。只有返回 `test=accepted` 才表示 Bark 服务接受了测试请求；这不等于手机已经显示，手机显示需要用户确认。完成后请用户新开一局 Claude Code。
+setup 会隐藏读取 Bark URL、发送测试通知，先把上述 MCP 工具加入配置目录（默认 `~/.claude`）下 `settings.json` 的 `permissions.allow`，免得用户离开时通知卡在授权弹窗，再写入托管规则 `rules/notify-me-claude.md`。结果里的 `config_dir` 是实际写入的目录；`warnings` 不为空说明插件未安装或未启用。只有返回 `test=accepted` 才表示 Bark 服务接受了测试请求；这不等于手机已经显示，手机显示需要用户确认。完成后请用户新开一局 Claude Code。
 
 ## 诊断
 
 ```text
-python3 <plugin-root>/scripts/notify_me.py doctor
+python3 "<plugin-root>/scripts/notify_me.py" doctor
 ```
 
 `bound`、`rule_managed`、`permission_allowed`、`plugin_installed`、`plugin_enabled` 都应为 `true`。
@@ -45,5 +35,5 @@ python3 <plugin-root>/scripts/notify_me.py doctor
 已有绑定时可单独测试：
 
 ```text
-python3 <plugin-root>/scripts/notify_me.py test
+python3 "<plugin-root>/scripts/notify_me.py" test
 ```

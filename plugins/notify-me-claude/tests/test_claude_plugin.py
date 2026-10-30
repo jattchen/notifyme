@@ -3,8 +3,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import shlex
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +194,46 @@ class ClaudePackageTests(unittest.TestCase):
             self.assertTrue(report["plugin_enabled"])
             self.assertTrue(report["mcp_server_present"])
             self.assertFalse(report["bound"])
+
+    def test_tool_name_derives_from_manifests(self):
+        from notify_me.agents_rule import TOOL_PERMISSION
+        from notify_me.deliver import TOOL_NAME
+
+        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
+        (server,) = json.loads((PLUGIN_ROOT / ".mcp.json").read_text())["mcpServers"]
+        derived = "mcp__plugin_{}_{}__{}".format(manifest["name"], server, TOOL_NAME)
+        self.assertEqual(TOOL_PERMISSION, derived)
+        self.assertEqual(TOOL, derived)
+        self.assertIn(derived, (PLUGIN_ROOT / "skills" / "notify-me-claude" / "SKILL.md").read_text())
+        self.assertIn(derived, (REPO_ROOT / "README.md").read_text())
+
+    def test_open_setup_forwards_config_and_quotes_paths(self):
+        from notify_me.cli import setup_terminal_script
+
+        odd = "/tmp/a b'c/claude"
+        script = setup_terminal_script(
+            env={"CLAUDE_CONFIG_DIR": odd, "CLAUDE_NOTIFY_ME_HOME": odd + "-state"},
+            python="/usr/bin/python3",
+        )
+        literal = script.split("do script ", 1)[1].rsplit("\nend tell", 1)[0]
+        self.assertTrue(literal.startswith('"') and literal.endswith('"'))
+        command = literal[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        outer = shlex.split(command)
+        self.assertEqual(outer[:2], ["bash", "-lc"])
+        inner = shlex.split(outer[2])
+        self.assertEqual(
+            inner,
+            [
+                "env",
+                "CLAUDE_CONFIG_DIR=" + odd,
+                "CLAUDE_NOTIFY_ME_HOME=" + odd + "-state",
+                "/usr/bin/python3",
+                str(PLUGIN_ROOT / "scripts" / "notify_me.py"),
+                "setup",
+            ],
+        )
+        bare = setup_terminal_script(env={}, python="/usr/bin/python3")
+        self.assertNotIn("CLAUDE_CONFIG_DIR", bare)
 
     def test_bark_uses_official_claude_icon(self):
         self.assertIn(
@@ -409,6 +451,98 @@ class ClaudePackageTests(unittest.TestCase):
                 lsp.stderr.close()
                 lsp.kill()
                 lsp.wait()
+
+
+class ClaudeSetupTests(unittest.TestCase):
+    """Drive `setup` with the terminal, prompt and Bark test stubbed out."""
+
+    def _run_setup(self, test_status="accepted"):
+        from notify_me import cli
+
+        prompted = []
+
+        def fake_getpass(prompt):
+            prompted.append(prompt)
+            return "https://api.day.app/Abcdefgh1234"
+
+        tested = {"ok": test_status == "accepted", "status": test_status}
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), mock.patch.object(
+            cli.getpass, "getpass", side_effect=fake_getpass
+        ), mock.patch.object(cli.Deliverer, "test", return_value=tested), mock.patch.object(
+            cli.sys, "stderr"
+        ):
+            try:
+                return cli._setup({}), prompted
+            except cli.NotifyMeError as exc:
+                return exc, prompted
+
+    def _install_plugin(self, env, enabled=True):
+        plugins = env.home / "plugins"
+        plugins.mkdir(exist_ok=True)
+        (plugins / "installed_plugins.json").write_text(
+            json.dumps({"version": 2, "plugins": {PLUGIN_ID: [{"scope": "user", "installPath": str(PLUGIN_ROOT)}]}})
+        )
+        if enabled:
+            (env.home / "settings.json").write_text(json.dumps({"enabledPlugins": {PLUGIN_ID: True}}))
+
+    def test_unmergeable_settings_fail_before_prompt_or_writes(self):
+        for raw in ("[]", "{not json", json.dumps({"permissions": {"allow": "x"}})):
+            with ClaudeEnv() as env:
+                (env.home / "settings.json").write_text(raw)
+                result, prompted = self._run_setup()
+                self.assertEqual(getattr(result, "code", None), "settings_unreadable", raw)
+                self.assertEqual(prompted, [])
+                self.assertFalse((env.home / "rules" / "notify-me-claude.md").exists())
+                self.assertFalse(Path(os.environ["CLAUDE_NOTIFY_ME_HOME"], "binding.json").exists())
+                self.assertEqual((env.home / "settings.json").read_text(), raw)
+
+    def test_empty_settings_is_treated_as_empty_object(self):
+        with ClaudeEnv() as env:
+            self._install_plugin(env, enabled=False)
+            (env.home / "settings.json").write_text("  \n")
+            result, _ = self._run_setup()
+            self.assertTrue(result["ok"], result)
+            data = json.loads((env.home / "settings.json").read_text())
+            self.assertEqual(data["permissions"]["allow"], [TOOL])
+
+    def test_success_writes_permission_then_rule_and_reports_config_dir(self):
+        with ClaudeEnv() as env:
+            self._install_plugin(env)
+            result, prompted = self._run_setup()
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(len(prompted), 1)
+            self.assertEqual(result["config_dir"], str(env.home))
+            self.assertEqual(result["warnings"], [])
+            self.assertTrue(result["plugin_installed"])
+            self.assertTrue(result["plugin_enabled"])
+            self.assertTrue(permission_allowed())
+            self.assertTrue(has_managed_block())
+            settings = json.loads((env.home / "settings.json").read_text())
+            self.assertEqual(settings["enabledPlugins"], {PLUGIN_ID: True})
+
+    def test_missing_plugin_is_reported_as_warning(self):
+        with ClaudeEnv():
+            result, _ = self._run_setup()
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["warnings"], ["plugin_not_installed", "plugin_not_enabled"])
+            self.assertIn("claude plugin install", result["hint"])
+
+    def test_rule_failure_keeps_permission_and_names_the_step(self):
+        with ClaudeEnv() as env:
+            (env.home / "rules" / "notify-me-claude.md").mkdir(parents=True)
+            result, _ = self._run_setup()
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["test"], "accepted")
+            self.assertEqual(result["error"]["code"], "rule_write_failed")
+            self.assertEqual(result["permission"]["permission"], TOOL)
+            self.assertTrue(permission_allowed())
+
+    def test_rejected_test_push_writes_no_host_config(self):
+        with ClaudeEnv() as env:
+            result, _ = self._run_setup(test_status="failed")
+            self.assertEqual(result["error"]["code"], "test_not_accepted")
+            self.assertFalse((env.home / "settings.json").exists())
+            self.assertFalse((env.home / "rules" / "notify-me-claude.md").exists())
 
 
 if __name__ == "__main__":

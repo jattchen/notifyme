@@ -48,7 +48,10 @@ def _read_json_object(path, code, label):
     if not path.is_file():
         return None
     try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            return {}
+        loaded = json.loads(text)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise NotifyMeError(code, "无法读取 {}".format(label)) from exc
     if not isinstance(loaded, dict):
@@ -56,23 +59,26 @@ def _read_json_object(path, code, label):
     return loaded
 
 
-def commit_permission():
+def check_settings():
+    """Load settings.json and fail before any write if the allow list can't be merged."""
     path = settings_path()
     current = _read_json_object(path, "settings_unreadable", "Claude Code settings.json")
     if current is None:
         current = {}
     permissions = current.get("permissions")
-    if permissions is None:
-        permissions = {}
-        current["permissions"] = permissions
-    elif not isinstance(permissions, dict):
+    if permissions is not None and not isinstance(permissions, dict):
         raise NotifyMeError("settings_unreadable", "permissions 不是对象")
-    allow = permissions.get("allow")
-    if allow is None:
-        allow = []
-        permissions["allow"] = allow
-    elif not isinstance(allow, list):
+    allow = (permissions or {}).get("allow")
+    if allow is not None and not isinstance(allow, list):
         raise NotifyMeError("settings_unreadable", "permissions.allow 不是数组")
+    return current
+
+
+def commit_permission():
+    path = settings_path()
+    current = check_settings()
+    permissions = current.setdefault("permissions", {})
+    allow = permissions.setdefault("allow", [])
     if TOOL_PERMISSION in allow:
         action = "unchanged"
     else:

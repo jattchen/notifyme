@@ -298,9 +298,8 @@ TOOL_SCHEMA = {
                     "Absolute project root for this send. Relative values "
                     "such as '.', a project name, or '../foo' are rejected. "
                     "The path must name an existing directory. "
-                    "Use it when the MCP process has no CLAUDE_WORKSPACE_ROOT "
-                    "or CLAUDE_PROJECT_DIR, so two projects with the same "
-                    "item stay distinct."
+                    "Always pass it, so two projects with the same item "
+                    "stay distinct."
                 ),
             },
             "url": {
