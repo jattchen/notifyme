@@ -70,12 +70,14 @@ Cursor 使用独立的 `notify-me-cursor` 插件身份，不覆盖或复用 Grok
 
 Claude Code 使用独立的 `notify-me-claude` 插件身份，不覆盖或复用 Grok / Codex / Cursor。本仓库根目录就是 Claude Code 插件市场 `notifyme`，插件自带本地 stdio MCP 服务器 `notifyme_claude`，工具名为 `mcp__plugin_notify-me-claude_notifyme_claude__notifyme`。
 
+这个插件市场只给 Claude Code 用。Grok 也认 `.claude-plugin/marketplace.json`，所以不要在 Grok 里把本仓库根目录加成插件市场，Grok 照上面的「Agent 安装」走 `install.sh`。
+
 ```bash
 claude plugin marketplace add jattchen/notifyme
 claude plugin install notify-me-claude@notifyme
 ```
 
-安装后在 Claude Code 里显式调用 `/notify-me-claude`，它会运行插件根目录的 `scripts/notify_me.py open-setup`，弹出真实终端跑 `setup`，并把当前会话的 `CLAUDE_CONFIG_DIR` 带过去。`setup` 会隐藏读取 Bark URL、发送测试通知，先把上述工具加入 `~/.claude/settings.json` 的 `permissions.allow`，免得用户离开时通知卡在授权弹窗，再把托管规则写入 `~/.claude/rules/notify-me-claude.md`（每个项目都会加载）。`settings.json` 无法合并时，`setup` 在询问 URL 之前就停下，不写任何文件；插件未安装或未启用时会给出警告。插件本身不能带常驻规则，所以这一步不能省。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
+安装后在 Claude Code 里显式调用 `/notify-me-claude`，它会运行插件根目录的 `scripts/notify_me.py open-setup`，弹出真实终端跑 `setup`，并把当前会话的 `CLAUDE_CONFIG_DIR` 带过去。`setup` 会隐藏读取 Bark URL、发送测试通知，先把上述工具加入 `~/.claude/settings.json` 的 `permissions.allow`，免得用户离开时通知卡在授权弹窗，再把托管规则写入 `~/.claude/rules/notify-me-claude.md`（每个项目都会加载）。`settings.json` 无法合并或规则文件无法写入时，`setup` 在询问 URL 之前就停下，不写任何文件；插件未安装或未启用时会给出警告。插件本身不能带常驻规则，所以这一步不能省。规则文件整体归插件管理，重跑 `setup` 会覆盖全部内容，不要在里面写自己的内容。诊断运行插件根目录的 `scripts/notify_me.py doctor`。
 
 正常通知必须由当前顶层主 Agent 直接调用该 MCP 工具，并传入扁平的 `condition`、`item_id`、`state`、`message` 和当前项目绝对路径 `workspace`。只有 `status=accepted` 才能说明 Bark 服务接受了请求；Bark URL 不得进入对话、命令参数或日志。完成后请新开一局 Claude Code。
 

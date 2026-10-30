@@ -22,7 +22,11 @@ disable-model-invocation: true
 python3 "<plugin-root>/scripts/notify_me.py" open-setup
 ```
 
-setup 会隐藏读取 Bark URL、发送测试通知，先把上述 MCP 工具加入配置目录（默认 `~/.claude`）下 `settings.json` 的 `permissions.allow`，免得用户离开时通知卡在授权弹窗，再写入托管规则 `rules/notify-me-claude.md`。结果里的 `config_dir` 是实际写入的目录；`warnings` 不为空说明插件未安装或未启用。只有返回 `test=accepted` 才表示 Bark 服务接受了测试请求；这不等于手机已经显示，手机显示需要用户确认。完成后请用户新开一局 Claude Code。
+`open-setup` 只负责开窗口，返回 `status=opened`、`config_dir`（setup 会写入的配置目录）和插件状态。`warnings` 不为空说明插件未安装或未启用，先按 `hint` 处理，否则规则指向的工具不存在。
+
+setup 本身在新终端里运行，结果只显示在那个窗口，你看不到：它会先检查 `settings.json` 和规则文件能否写入（不能写就在询问 URL 之前停下），再隐藏读取 Bark URL、发送测试通知，然后把上述 MCP 工具加入 `settings.json` 的 `permissions.allow`（免得用户离开时通知卡在授权弹窗），最后写入托管规则 `rules/notify-me-claude.md`。规则文件整体归本插件管理，重跑 setup 会覆盖全部内容。
+
+所以开窗后要等用户确认终端里已完成，再运行下面的 `doctor` 核对；不要提前说已绑定或已推送。终端里返回 `test=accepted` 只表示 Bark 服务接受了测试请求，不等于手机已经显示，手机显示需要用户确认。核对通过后请用户新开一局 Claude Code。
 
 ## 诊断
 
@@ -30,7 +34,7 @@ setup 会隐藏读取 Bark URL、发送测试通知，先把上述 MCP 工具加
 python3 "<plugin-root>/scripts/notify_me.py" doctor
 ```
 
-`bound`、`rule_managed`、`permission_allowed`、`plugin_installed`、`plugin_enabled` 都应为 `true`。
+`bound`、`rule_managed`、`permission_allowed`、`plugin_installed`、`plugin_enabled` 都应为 `true`，`permission_blocked_by` 应为空；不为空说明 `deny`/`ask` 规则拦住了通知工具。
 
 已有绑定时可单独测试：
 

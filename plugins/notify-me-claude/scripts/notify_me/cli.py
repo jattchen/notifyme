@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .agents_rule import check_target as check_rule_target
 from .agents_rule import commit as commit_agents
 from .agents_rule import has_managed_block, plan as plan_agents
 from .bark import BarkEndpoint
@@ -19,6 +20,7 @@ from .host_install import (
     check_settings,
     commit_permission,
     permission_allowed,
+    permission_blocked,
     plugin_enabled,
     plugin_installs,
 )
@@ -104,7 +106,10 @@ def _plugin_state():
         warnings.append("plugin_not_installed")
     if not enabled:
         warnings.append("plugin_not_enabled")
-    return {"plugin_installed": installed, "plugin_enabled": enabled, "warnings": warnings}
+    state = {"plugin_installed": installed, "plugin_enabled": enabled, "warnings": warnings}
+    if warnings:
+        state["hint"] = _PLUGIN_HINT
+    return state
 
 
 _PLUGIN_HINT = (
@@ -123,6 +128,10 @@ def _setup(options):
         return {"ok": True, "status": "dry_run"}
 
     check_settings()
+    try:
+        check_rule_target()
+    except OSError as exc:
+        raise NotifyMeError("rule_unwritable", str(exc)) from exc
     plugin = _plugin_state()
     sys.stderr.write("配置目录：{}\n".format(claude_home()))
     if plugin["warnings"]:
@@ -185,8 +194,6 @@ def _setup(options):
         "permission": written.get("permission"),
     }
     result.update(plugin)
-    if plugin["warnings"]:
-        result["hint"] = _PLUGIN_HINT
     return result
 
 
@@ -205,10 +212,15 @@ def setup_terminal_script(env=None, python=None):
     """
     env = env if env is not None else os.environ
     parts = ["env"]
+    assignments = []
     for key in _FORWARDED_ENV:
         value = env.get(key)
         if value:
-            parts.append("{}={}".format(key, shlex.quote(value)))
+            assignments.append("{}={}".format(key, shlex.quote(value)))
+        else:
+            # Don't let the login shell's own export point setup elsewhere.
+            parts.extend(["-u", key])
+    parts.extend(assignments)
     parts.append(shlex.quote(python or sys.executable))
     parts.append(shlex.quote(str(Path(__file__).resolve().parents[1] / "notify_me.py")))
     parts.append("setup")
@@ -221,16 +233,24 @@ def setup_terminal_script(env=None, python=None):
     ).format(_applescript_string(command))
 
 
+_OPEN_SETUP_NEXT = (
+    "setup 在新终端里运行，结果只显示在那个窗口；等用户确认终端里完成后，"
+    "再运行 doctor 核对，不要提前声称已绑定或已推送"
+)
+
+
 def _open_setup(options):
     script = setup_terminal_script()
+    base = {"config_dir": str(claude_home()), "next": _OPEN_SETUP_NEXT}
+    base.update(_plugin_state())
     if options.get("dry_run"):
-        return {"ok": True, "status": "dry_run", "script": script, "config_dir": str(claude_home())}
+        return dict(base, ok=True, status="dry_run", script=script)
     completed = subprocess.run(
         ["osascript"], input=script, text=True, capture_output=True
     )
     if completed.returncode != 0:
         raise NotifyMeError("terminal_failed", "无法打开终端：{}".format(completed.stderr.strip()))
-    return {"ok": True, "status": "opened", "config_dir": str(claude_home())}
+    return dict(base, ok=True, status="opened")
 
 
 def _doctor(deliverer):
@@ -257,6 +277,7 @@ def _doctor(deliverer):
         "rule_managed": has_managed_block(agents_text),
         "settings_json": str(settings_path()),
         "permission_allowed": permission_allowed(),
+        "permission_blocked_by": permission_blocked(),
         "plugin_id": PLUGIN_ID,
         "plugin_installed": bool(plugin_installs()),
         "plugin_enabled": plugin_enabled(),

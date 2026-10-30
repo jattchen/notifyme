@@ -27,7 +27,10 @@ MANAGED_BODY = (
     "用户这一次的整件事做完 → condition=done。\n"
     "未命中不发。中间步骤不发 done。仅 status=accepted 可称已推送。"
 ).format(TOOL_PERMISSION)
-RULE_HEADER = "# Notify Me Claude\n\n"
+RULE_HEADER = (
+    "# Notify Me Claude\n\n"
+    "<!-- 本文件整体由 notify-me-claude setup 管理，重新运行 setup 会覆盖全部内容。 -->\n"
+)
 _COMPLETE_CURRENT_BLOCK_RE = re.compile(
     re.escape(MANAGED_START) + r".+?" + re.escape(MANAGED_END),
     re.DOTALL,
@@ -47,6 +50,14 @@ def _apply(text):
     if text:
         return canonical, "replaced"
     return canonical, "appended"
+
+
+def check_target():
+    """Fail before any write if the rule path can't hold a regular file."""
+    path = agents_path()
+    if path.exists() and not path.is_file():
+        raise OSError("notify-me-claude.md 不是普通文件")
+    _write_destination(path)
 
 
 def plan():

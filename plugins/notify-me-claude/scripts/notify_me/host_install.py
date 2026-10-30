@@ -60,25 +60,38 @@ def _read_json_object(path, code, label):
 
 
 def check_settings():
-    """Load settings.json and fail before any write if the allow list can't be merged."""
+    """Load settings.json and fail before any write if the allow list can't be merged.
+
+    Returns the settings with `permissions.allow` present as a list; a null
+    `permissions` or `allow` is treated like a missing one.
+    """
     path = settings_path()
+    if path.exists() and not path.is_file():
+        raise NotifyMeError("settings_unreadable", "Claude Code settings.json 不是普通文件")
+    if path.is_symlink():
+        _write_destination(path)
     current = _read_json_object(path, "settings_unreadable", "Claude Code settings.json")
     if current is None:
         current = {}
     permissions = current.get("permissions")
-    if permissions is not None and not isinstance(permissions, dict):
+    if permissions is None:
+        permissions = {}
+    elif not isinstance(permissions, dict):
         raise NotifyMeError("settings_unreadable", "permissions 不是对象")
-    allow = (permissions or {}).get("allow")
-    if allow is not None and not isinstance(allow, list):
+    allow = permissions.get("allow")
+    if allow is None:
+        allow = []
+    elif not isinstance(allow, list):
         raise NotifyMeError("settings_unreadable", "permissions.allow 不是数组")
+    permissions["allow"] = allow
+    current["permissions"] = permissions
     return current
 
 
 def commit_permission():
     path = settings_path()
     current = check_settings()
-    permissions = current.setdefault("permissions", {})
-    allow = permissions.setdefault("allow", [])
+    allow = current["permissions"]["allow"]
     if TOOL_PERMISSION in allow:
         action = "unchanged"
     else:
@@ -104,12 +117,27 @@ def _settings_or_empty():
         return {}
 
 
-def permission_allowed():
+_SERVER_RULE = TOOL_PERMISSION.rsplit("__", 1)[0]
+_MATCHING_RULES = (TOOL_PERMISSION, _SERVER_RULE, _SERVER_RULE + "__*")
+
+
+def _matching_rules(kind):
     permissions = _settings_or_empty().get("permissions")
     if not isinstance(permissions, dict):
-        return False
-    allow = permissions.get("allow")
-    return isinstance(allow, list) and TOOL_PERMISSION in allow
+        return []
+    rules = permissions.get(kind)
+    if not isinstance(rules, list):
+        return []
+    return [rule for rule in rules if rule in _MATCHING_RULES]
+
+
+def permission_blocked():
+    """Return deny/ask rules that override the allow entry for the notify tool."""
+    return _matching_rules("deny") + _matching_rules("ask")
+
+
+def permission_allowed():
+    return bool(_matching_rules("allow")) and not permission_blocked()
 
 
 def plugin_enabled():

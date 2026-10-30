@@ -109,6 +109,7 @@ class ClaudePackageTests(unittest.TestCase):
             self.assertEqual(text.count(MANAGED_END), 1)
             # A rule without `paths` frontmatter loads in every project.
             self.assertFalse(text.startswith("---"))
+            self.assertIn("覆盖全部内容", text)
             self.assertIn(TOOL, text)
             self.assertTrue(has_managed_block(text))
             self.assertTrue(has_managed_block())
@@ -165,6 +166,22 @@ class ClaudePackageTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, "settings_unreadable")
             self.assertEqual(settings.read_text(), "{not json")
 
+    def test_deny_or_ask_rule_blocks_permission(self):
+        from notify_me.host_install import permission_blocked
+
+        server = TOOL.rsplit("__", 1)[0]
+        for kind, rule in (("deny", TOOL), ("ask", server), ("deny", server + "__*")):
+            with ClaudeEnv() as env:
+                (env.home / "settings.json").write_text(
+                    json.dumps({"permissions": {"allow": [TOOL], kind: [rule, "Bash(rm *)"]}})
+                )
+                self.assertFalse(permission_allowed(), rule)
+                self.assertEqual(permission_blocked(), [rule])
+        with ClaudeEnv() as env:
+            (env.home / "settings.json").write_text(json.dumps({"permissions": {"allow": [server]}}))
+            self.assertTrue(permission_allowed())
+            self.assertEqual(permission_blocked(), [])
+
     def test_doctor_reports_claude_install_state(self):
         from notify_me import cli
 
@@ -190,6 +207,7 @@ class ClaudePackageTests(unittest.TestCase):
             self.assertEqual(report["host"], "claude")
             self.assertTrue(report["rule_managed"])
             self.assertTrue(report["permission_allowed"])
+            self.assertEqual(report["permission_blocked_by"], [])
             self.assertTrue(report["plugin_installed"])
             self.assertTrue(report["plugin_enabled"])
             self.assertTrue(report["mcp_server_present"])
@@ -232,8 +250,38 @@ class ClaudePackageTests(unittest.TestCase):
                 "setup",
             ],
         )
-        bare = setup_terminal_script(env={}, python="/usr/bin/python3")
-        self.assertNotIn("CLAUDE_CONFIG_DIR", bare)
+        bare = setup_terminal_script(env={"CLAUDE_CONFIG_DIR": ""}, python="/usr/bin/python3")
+        literal = bare.split("do script ", 1)[1].rsplit("\nend tell", 1)[0]
+        inner = shlex.split(shlex.split(literal[1:-1])[2])
+        self.assertEqual(
+            inner[:5], ["env", "-u", "CLAUDE_CONFIG_DIR", "-u", "CLAUDE_NOTIFY_ME_HOME"]
+        )
+        self.assertNotIn("CLAUDE_CONFIG_DIR=", bare)
+
+    def test_open_setup_unset_vars_clear_login_shell_exports(self):
+        from notify_me.cli import setup_terminal_script
+
+        script = setup_terminal_script(env={}, python="/usr/bin/printenv")
+        literal = script.split("do script ", 1)[1].rsplit("\nend tell", 1)[0]
+        inner = shlex.split(shlex.split(literal[1:-1])[2])
+        probe = inner[: inner.index("/usr/bin/printenv") + 1]
+        polluted = dict(os.environ, CLAUDE_CONFIG_DIR="/wrong", CLAUDE_NOTIFY_ME_HOME="/wrong")
+        out = subprocess.run(probe, capture_output=True, text=True, env=polluted).stdout
+        self.assertNotIn("CLAUDE_CONFIG_DIR=", out)
+        self.assertNotIn("CLAUDE_NOTIFY_ME_HOME=", out)
+
+    def test_open_setup_reports_plugin_state_and_next_step(self):
+        from notify_me import cli
+
+        with ClaudeEnv() as env:
+            result = cli._open_setup({"dry_run": True})
+            self.assertEqual(result["config_dir"], str(env.home))
+            self.assertEqual(result["warnings"], ["plugin_not_installed", "plugin_not_enabled"])
+            self.assertIn("claude plugin install", result["hint"])
+            self.assertIn("doctor", result["next"])
+            skill = (PLUGIN_ROOT / "skills" / "notify-me-claude" / "SKILL.md").read_text()
+            for field in ("status=opened", "config_dir", "warnings", "hint", "doctor"):
+                self.assertIn(field, skill)
 
     def test_bark_uses_official_claude_icon(self):
         self.assertIn(
@@ -485,16 +533,56 @@ class ClaudeSetupTests(unittest.TestCase):
         if enabled:
             (env.home / "settings.json").write_text(json.dumps({"enabledPlugins": {PLUGIN_ID: True}}))
 
+    def _assert_stopped_before_prompt(self, env, result, prompted, code, label):
+        self.assertEqual(getattr(result, "code", None), code, label)
+        self.assertEqual(prompted, [], label)
+        self.assertFalse((env.home / "rules" / "notify-me-claude.md").is_file(), label)
+        self.assertFalse(Path(os.environ["CLAUDE_NOTIFY_ME_HOME"], "binding.json").exists(), label)
+
     def test_unmergeable_settings_fail_before_prompt_or_writes(self):
-        for raw in ("[]", "{not json", json.dumps({"permissions": {"allow": "x"}})):
+        for raw in (
+            "[]",
+            "{not json",
+            json.dumps({"permissions": {"allow": "x"}}),
+            json.dumps({"permissions": []}),
+        ):
             with ClaudeEnv() as env:
                 (env.home / "settings.json").write_text(raw)
                 result, prompted = self._run_setup()
-                self.assertEqual(getattr(result, "code", None), "settings_unreadable", raw)
-                self.assertEqual(prompted, [])
-                self.assertFalse((env.home / "rules" / "notify-me-claude.md").exists())
-                self.assertFalse(Path(os.environ["CLAUDE_NOTIFY_ME_HOME"], "binding.json").exists())
+                self._assert_stopped_before_prompt(env, result, prompted, "settings_unreadable", raw)
                 self.assertEqual((env.home / "settings.json").read_text(), raw)
+
+    def test_non_file_settings_fail_before_prompt(self):
+        for kind in ("directory", "symlink-to-directory"):
+            with ClaudeEnv() as env:
+                settings = env.home / "settings.json"
+                if kind == "directory":
+                    settings.mkdir()
+                else:
+                    (env.home / "elsewhere").mkdir()
+                    settings.symlink_to(env.home / "elsewhere")
+                result, prompted = self._run_setup()
+                self._assert_stopped_before_prompt(env, result, prompted, "settings_unreadable", kind)
+
+    def test_non_file_rule_target_fails_before_prompt(self):
+        with ClaudeEnv() as env:
+            (env.home / "rules" / "notify-me-claude.md").mkdir(parents=True)
+            result, prompted = self._run_setup()
+            self._assert_stopped_before_prompt(env, result, prompted, "rule_unwritable", "rule dir")
+            self.assertFalse((env.home / "settings.json").exists())
+
+    def test_null_permissions_or_allow_are_treated_as_missing(self):
+        for raw, kept in (
+            ({"permissions": None, "model": "opus"}, {}),
+            ({"permissions": {"allow": None, "deny": ["Read(.env)"]}}, {"deny": ["Read(.env)"]}),
+        ):
+            with ClaudeEnv() as env:
+                (env.home / "settings.json").write_text(json.dumps(raw))
+                result, _ = self._run_setup()
+                self.assertTrue(result["ok"], result)
+                data = json.loads((env.home / "settings.json").read_text())
+                self.assertEqual(data["permissions"], dict(kept, allow=[TOOL]))
+                self.assertTrue(permission_allowed())
 
     def test_empty_settings_is_treated_as_empty_object(self):
         with ClaudeEnv() as env:
@@ -528,8 +616,9 @@ class ClaudeSetupTests(unittest.TestCase):
             self.assertIn("claude plugin install", result["hint"])
 
     def test_rule_failure_keeps_permission_and_names_the_step(self):
-        with ClaudeEnv() as env:
-            (env.home / "rules" / "notify-me-claude.md").mkdir(parents=True)
+        from notify_me import cli
+
+        with ClaudeEnv(), mock.patch.object(cli, "commit_agents", side_effect=OSError("disk full")):
             result, _ = self._run_setup()
             self.assertFalse(result["ok"])
             self.assertEqual(result["test"], "accepted")
